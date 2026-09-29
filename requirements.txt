@@ -1,0 +1,4 @@
+# StaticSight (Python) runtime dependency. Plain-Python setup, no uv needed:
+#   python3 -m pip install -r requirements.txt        (or: python3 staticsight.py --install)
+# Kept in sync with staticsight-py/pyproject.toml by a test.
+mcp[cli]>=1.12,<2

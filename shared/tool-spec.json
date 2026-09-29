@@ -1,0 +1,326 @@
+{
+  "server": {
+    "name": "StaticSight",
+    "instructions": "StaticSight gives you zero-compile, high-fidelity evidence about an uncompiled C++ repository (Universal Ctags, GNU Global, ripgrep, cppcheck, git). For a code review, start with review_changes (one-call bundle) or get_diff_scopes, then drill down with the other tools. Every result is concise Markdown with file:line references you can cite. Results marked 'heuristic' come from text analysis, not a compiler: verify before asserting."
+  },
+  "tools": [
+    {
+      "name": "review_changes",
+      "description": "START HERE for 'review my changes' / 'what could break?'. One-call C++ review bundle for the current branch (committed + staged + unstaged + untracked vs the merge-base with origin/main, falling back to origin/master). Runs, within a token budget: diff scopes, cppcheck on changed files, branch skeletons of changed functions, caller impact of changed functions, memory-layout risks of changed structs, include blast radius of changed headers, lock-consistency checks on members touched by the diff, and lock-order (deadlock) checks for locks the changed functions take. Ends with a reviewer checklist. Use the individual tools afterwards to drill into any item.",
+      "params": [
+        {
+          "name": "base_ref",
+          "type": "string",
+          "default": "",
+          "description": "Git ref to diff against. Empty = merge-base with origin/main (fallback origin/master, main, master, HEAD)."
+        },
+        {
+          "name": "max_symbols",
+          "type": "integer",
+          "default": 8,
+          "description": "Maximum number of changed functions/types to analyse in depth."
+        }
+      ]
+    },
+    {
+      "name": "get_diff_scopes",
+      "description": "Maps every changed line of the current diff to the exact C++ function, method, class, struct, enum or macro that encloses it (via Universal Ctags). Also reports new and removed symbols, signature changes (old -> new), struct/class layout changes, header changes, deleted/renamed files, and suggests the next tool calls. Use this first to learn WHAT changed before asking who is affected.",
+      "params": [
+        {
+          "name": "base_ref",
+          "type": "string",
+          "default": "",
+          "description": "Git ref to diff against. Empty = merge-base with origin/main (fallback origin/master, main, master, HEAD)."
+        },
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict files, e.g. 'src/net/*'."
+        }
+      ]
+    },
+    {
+      "name": "get_enclosing_scope",
+      "description": "Returns the innermost C++ function/method/class/struct/namespace that encloses a given line, with its qualified name, signature, parent scope, line range and the line-numbered source (the target line is marked with >). Use when you have a file:line (from a diff, stack trace, or another tool) and need the full surrounding code without reading the whole file.",
+      "params": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Path relative to the workspace root (absolute paths inside the workspace are accepted)."
+        },
+        {
+          "name": "target_line",
+          "type": "integer",
+          "required": true,
+          "description": "1-based line number."
+        }
+      ]
+    },
+    {
+      "name": "get_branch_skeleton",
+      "description": "Returns only the control-flow skeleton of a C++ function (if/else/switch/case/for/while/do/try/catch/return/throw/break/continue/goto) as an indented tree, annotated with lock acquisitions, allocations/releases, early exits that may leak a resource, and lines changed in the current diff. Use to audit logic paths, error handling and resource pairing cheaply instead of reading the full body. Select the function by symbol name, by start_line (enclosing function), or by an explicit start_line..end_line range.",
+      "params": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Path relative to the workspace root."
+        },
+        {
+          "name": "symbol",
+          "type": "string",
+          "default": "",
+          "description": "Function name in that file, e.g. 'process_packet' or 'Router::process_packet'."
+        },
+        {
+          "name": "start_line",
+          "type": "integer",
+          "default": 0,
+          "description": "1-based start line. Alone: the enclosing function of this line is used."
+        },
+        {
+          "name": "end_line",
+          "type": "integer",
+          "default": 0,
+          "description": "1-based inclusive end line (optional)."
+        }
+      ]
+    },
+    {
+      "name": "get_upstream_callers",
+      "description": "Finds every call site of a function/method across the repository (GNU Global reference index; falls back to ripgrep when the index is unavailable). Each hit shows file:line, the enclosing caller function, the call line, and whether the return value is used or ignored. Use after changing a function's signature, return values, error codes, preconditions or side effects to check that callers still hold up.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function or method name, e.g. 'process_packet' (a 'Class::' prefix is accepted and stripped)."
+        },
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict caller files, e.g. 'src/*'."
+        }
+      ]
+    },
+    {
+      "name": "get_symbol_definition",
+      "description": "Locates where a C++ symbol (function, method, class, struct, enum, macro, typedef) is defined, including overloads, with kind, signature and file:line (GNU Global; falls back to ripgrep + ctags). Use to jump to the implementation of something referenced in a diff.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Symbol name, e.g. 'zero_copy_allocate' or 'Packet'."
+        }
+      ]
+    },
+    {
+      "name": "get_symbol_contract",
+      "description": "Shows the contract of a C++ function or type used by the diff: declaration and definition signatures, qualifiers (const, noexcept, virtual, override, static, [[nodiscard]], ...), the leading doc comment, Doxygen tags (@pre, @post, @return, @throws, @warning, @note) and obligation keywords (MUST, NEVER, thread-safe, ownership, non-null). Use to check that changed code honours the requirements of what it calls (e.g. every allocation must be released, pointer must be non-null, lock must be held).",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function or type name, e.g. 'zero_copy_allocate'."
+        }
+      ]
+    },
+    {
+      "name": "track_struct_risks",
+      "description": "Finds low-level memory operations that depend on the exact layout of a struct/class: sizeof/offsetof, memcpy/memmove/memset/memcmp, reinterpret_cast/C-style casts/bit_cast, raw send/recv/read/write/fwrite/mmap, byte-order conversions, packing pragmas, unions and static_asserts. Checks the matching line and the 2 lines around it, ignores comments, and labels each hit with its risk (wire format, on-disk format, padding, ABI). Use whenever a struct/class gains, loses, reorders or resizes a member.",
+      "params": [
+        {
+          "name": "struct_name",
+          "type": "string",
+          "required": true,
+          "description": "Struct/class name, e.g. 'Packet'."
+        },
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict files."
+        }
+      ]
+    },
+    {
+      "name": "get_include_blast_radius",
+      "description": "Lists every C/C++ file that #includes a header (direct consumers), plus files that include it transitively through other headers, grouped by directory with the share of translation units affected. Use when a header changes (macros, inline functions, struct layout, templates, constants) to see which modules must be re-verified and rebuilt.",
+      "params": [
+        {
+          "name": "header_filename",
+          "type": "string",
+          "required": true,
+          "description": "Header name or path, e.g. 'packet.hpp' or 'src/net/packet.hpp'."
+        },
+        {
+          "name": "transitive_depth",
+          "type": "integer",
+          "default": 2,
+          "description": "1 = direct includers only; 2-3 = also follow headers that include it."
+        }
+      ]
+    },
+    {
+      "name": "track_state_mutations",
+      "description": "Finds every read/write of a variable or member (assignment, compound assignment, ++/--, mutating method calls) and, for each access, whether a lock (lock_guard, unique_lock, scoped_lock, shared_lock, .lock(), Win32 critical sections and SRW locks, RAII lock wrappers) or std::atomic protects it inside the enclosing function. Flags inconsistent locking (a member written under a mutex in one place and accessed bare in another), which is a likely data race. Use when the diff touches shared state, mutexes or concurrency.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Variable or member name, e.g. 'route_count'."
+        },
+        {
+          "name": "file_path",
+          "type": "string",
+          "default": "",
+          "description": "Optional file (relative path) to restrict the search."
+        }
+      ]
+    },
+    {
+      "name": "track_lock_order",
+      "description": "Finds potential deadlocks: builds the lock-acquisition order of the whole repository (which lock is taken while another is held, inside each function and through one level of calls) and reports cycles where two code paths take the same locks in opposite orders, the same non-recursive lock taken twice, and locks held across blocking calls (send/recv, file I/O, Sleep, WaitForSingleObject). Recognises std guards (lock_guard, unique_lock, scoped_lock, shared_lock), .lock(), std::lock, Win32 critical sections and SRW locks, and RAII lock wrappers. Use when the diff adds or reorders locks, calls into locking code while holding a lock, or when investigating hangs.",
+      "params": [
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict the scanned files, e.g. 'src/net/*'."
+        },
+        {
+          "name": "symbol",
+          "type": "string",
+          "default": "",
+          "description": "Optional lock (mutex/critical section) name to focus on, e.g. 'route_mutex'."
+        }
+      ]
+    },
+    {
+      "name": "run_file_static_audit",
+      "description": "Runs cppcheck (no compilation, best-effort includes) on one C/C++ file and returns findings sorted by severity: memory/resource leaks, null dereferences, out-of-bounds, uninitialised variables, use-after-free, bad casts, performance and portability issues. Findings on lines changed in the current diff are marked. Use on every modified .cpp/.c file during review.",
+      "params": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Path relative to the workspace root."
+        },
+        {
+          "name": "only_changed_lines",
+          "type": "boolean",
+          "default": false,
+          "description": "If true, keep only findings on changed lines or inside changed functions."
+        },
+        {
+          "name": "base_ref",
+          "type": "string",
+          "default": "",
+          "description": "Git ref used to determine changed lines (empty = default merge-base)."
+        }
+      ]
+    },
+    {
+      "name": "semantic_search",
+      "description": "Finds code by MEANING, not exact text, across the whole repository (every language: C/C++, Python, scripts, docs, configs). Use when you know WHAT the code does but not what it is called, e.g. 'where do we retry failed connections?', 'code that parses the packet header', 'where is the registry key written'. Combines a local code-embedding model with keyword matching and returns ranked functions/classes/sections with file:line, score and a short excerpt. Before searching, the local index is refreshed automatically when files changed (large changes refresh in the background; the result says so). After a git pull or big edits you may call refresh_semantic_index first.",
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Natural-language description of the code you are looking for (identifiers may be included)."
+        },
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict files, e.g. 'src/net/*'."
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "default": "",
+          "description": "Optional language filter, e.g. 'cpp', 'c', 'python', 'markdown', 'yaml'."
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "default": "",
+          "description": "Optional chunk kind filter, e.g. 'function', 'class', 'section'."
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": 10,
+          "description": "Maximum number of results (1-30)."
+        }
+      ]
+    },
+    {
+      "name": "find_similar_code",
+      "description": "Finds code elsewhere in the repository that is semantically similar to a given region: copy-paste twins, parallel implementations (Windows/Linux variants, encode/decode pairs) and places that probably need the same fix. Use during review when a function or bug fix changed: 'where else do we do this?'. Give a file and line (the enclosing function is used) or an explicit line range.",
+      "params": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Path relative to the workspace root."
+        },
+        {
+          "name": "start_line",
+          "type": "integer",
+          "required": true,
+          "description": "1-based line; alone, the enclosing function/chunk is used."
+        },
+        {
+          "name": "end_line",
+          "type": "integer",
+          "default": 0,
+          "description": "1-based inclusive end line for an explicit range (optional)."
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": 8,
+          "description": "Maximum number of similar regions (1-30)."
+        }
+      ]
+    },
+    {
+      "name": "refresh_semantic_index",
+      "description": "Builds or refreshes the local semantic search index for the workspace (incremental: only files whose content changed are re-embedded). Call it after a git pull, branch switch or large edits, or when semantic_search reports a stale index. Small refreshes finish before returning; large ones continue in the background (check get_index_status). Writes only to StaticSight's own data folder (`.staticsight/` in the repository, ignored by git), never to source files.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "params": [
+        {
+          "name": "full",
+          "type": "boolean",
+          "default": false,
+          "description": "Rebuild from scratch instead of refreshing incrementally."
+        }
+      ]
+    },
+    {
+      "name": "get_index_status",
+      "description": "Reports the state of the GNU Global symbol index and of the semantic search index (building with progress, ready, stale, not built), their locations and age, the embedding model, and which CLI engines are installed. Use when caller/definition results say they came from the ripgrep fallback, or to follow a background semantic index build.",
+      "params": []
+    }
+  ],
+  "prompts": [
+    {
+      "name": "review_cpp_changes",
+      "description": "Step-by-step workflow for a thorough, evidence-based review of C++ changes using StaticSight tools.",
+      "file": "prompts/review_cpp_changes.md"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "staticsight-mcp",
+  "version": "0.1.0",
+  "description": "StaticSight: zero-compile C++ code-review context for AI agents over MCP (ctags, GNU Global, ripgrep, cppcheck).",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "staticsight-ts": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-shared.mjs",
+    "start": "node dist/server.js",
+    "test": "npm run build && vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  },
+  "optionalDependencies": {
+    "@huggingface/tokenizers": "^0.2.0",
+    "onnxruntime-node": "^1.30.0"
+  }
+}

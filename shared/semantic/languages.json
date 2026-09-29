@@ -1,0 +1,57 @@
+{
+  "description": "File classification for semantic indexing (shared by Python and TypeScript). 'structural' languages are chunked per function/class via Universal Ctags; 'markdown' by heading; everything else by line windows.",
+  "extensions": {
+    ".c": "c", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".c++": "cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+    ".h++": "cpp", ".inl": "cpp", ".ipp": "cpp", ".tpp": "cpp", ".tcc": "cpp", ".cu": "cuda", ".cuh": "cuda",
+    ".cs": "csharp", ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala", ".go": "go", ".rs": "rust",
+    ".py": "python", ".pyi": "python", ".rb": "ruby", ".php": "php", ".pl": "perl", ".pm": "perl", ".lua": "lua",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
+    ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "typescript",
+    ".swift": "swift", ".m": "objc", ".mm": "objc", ".sh": "shell", ".bash": "shell", ".zsh": "shell",
+    ".ps1": "powershell", ".psm1": "powershell", ".psd1": "powershell", ".bat": "batch", ".cmd": "batch",
+    ".sql": "sql", ".r": "r", ".jl": "julia", ".dart": "dart", ".erl": "erlang", ".ex": "elixir", ".exs": "elixir",
+    ".hs": "haskell", ".ml": "ocaml", ".fs": "fsharp", ".vb": "vbnet", ".groovy": "groovy", ".gradle": "groovy",
+    ".md": "markdown", ".markdown": "markdown", ".rst": "rst", ".txt": "text", ".adoc": "asciidoc",
+    ".json": "json", ".jsonc": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini", ".cfg": "ini",
+    ".conf": "ini", ".xml": "xml", ".xaml": "xml", ".props": "xml", ".targets": "xml", ".csproj": "xml", ".vcxproj": "xml",
+    ".proj": "xml", ".config": "xml", ".manifest": "xml", ".resx": "xml", ".html": "html", ".htm": "html", ".css": "css",
+    ".scss": "css", ".cmake": "cmake", ".mk": "make", ".proto": "protobuf", ".bond": "bond", ".idl": "idl", ".thrift": "thrift",
+    ".tf": "terraform", ".bicep": "bicep", ".dockerfile": "dockerfile", ".rc": "rc", ".def": "def", ".mof": "mof", ".man": "text"
+  },
+  "filenames": {
+    "Makefile": "make", "makefile": "make", "GNUmakefile": "make", "CMakeLists.txt": "cmake", "Dockerfile": "dockerfile",
+    "Jenkinsfile": "groovy", "Rakefile": "ruby", "Gemfile": "ruby", "SConstruct": "python", "SConscript": "python",
+    "BUILD": "starlark", "BUILD.bazel": "starlark", "WORKSPACE": "starlark", "meson.build": "meson", "dirs": "text", "sources": "text"
+  },
+  "structural": [
+    "c", "cpp", "cuda", "csharp", "java", "kotlin", "scala", "go", "rust", "python", "ruby", "php", "perl", "lua",
+    "javascript", "typescript", "swift", "objc", "shell", "powershell", "sql", "r", "julia", "dart", "erlang", "elixir",
+    "haskell", "ocaml", "fsharp", "vbnet", "groovy", "protobuf", "tcl", "starlark"
+  ],
+  "comment_prefixes": {
+    "c": ["//", "/*", "*"], "cpp": ["//", "/*", "*"], "cuda": ["//", "/*", "*"], "csharp": ["//", "/*", "*"], "java": ["//", "/*", "*"],
+    "kotlin": ["//", "/*", "*"], "scala": ["//", "/*", "*"], "go": ["//", "/*", "*"], "rust": ["//", "/*", "*"],
+    "javascript": ["//", "/*", "*"], "typescript": ["//", "/*", "*"], "swift": ["//", "/*", "*"], "objc": ["//", "/*", "*"],
+    "php": ["//", "/*", "*", "#"], "dart": ["//", "/*", "*"], "groovy": ["//", "/*", "*"], "protobuf": ["//", "/*", "*"],
+    "fsharp": ["//", "(*", "*"], "python": ["#"], "ruby": ["#"], "perl": ["#"], "shell": ["#"], "powershell": ["#", "<#"],
+    "r": ["#"], "julia": ["#"], "elixir": ["#"], "tcl": ["#"], "starlark": ["#"], "lua": ["--"], "sql": ["--", "/*"],
+    "haskell": ["--", "{-"], "erlang": ["%"], "ocaml": ["(*", "*"], "vbnet": ["'"]
+  },
+  "unit_kinds": [
+    "function", "func", "method", "member", "singletonMethod", "constructor", "procedure", "subroutine", "macro", "class", "struct",
+    "union", "enum", "interface", "trait", "impl", "implementation", "namespace", "module", "type", "record", "protocol",
+    "object", "package", "alias", "delegate", "event", "property", "getter", "setter", "generator", "anonymousClass"
+  ],
+  "skip_extensions": [
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns", ".tif", ".tiff", ".webp", ".svgz", ".psd", ".pdf", ".doc", ".docx",
+    ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar", ".jar", ".war", ".nupkg",
+    ".exe", ".dll", ".so", ".dylib", ".o", ".obj", ".a", ".lib", ".pdb", ".ilk", ".exp", ".class", ".pyc", ".pyo", ".wasm",
+    ".bin", ".dat", ".db", ".sqlite", ".mdb", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".wav", ".avi",
+    ".mov", ".mkv", ".iso", ".img", ".vhd", ".vhdx", ".cab", ".msi", ".snk", ".pfx", ".cer", ".p12", ".keystore", ".map"
+  ],
+  "skip_filenames": [
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock", "poetry.lock", "uv.lock", "Pipfile.lock",
+    "composer.lock", "Gemfile.lock", "go.sum", "packages.lock.json", "GTAGS", "GRTAGS", "GPATH", "tags"
+  ],
+  "skip_suffixes": [".min.js", ".min.css", ".bundle.js", ".designer.cs", ".g.cs", ".pb.h", ".pb.cc", "_pb2.py"]
+}

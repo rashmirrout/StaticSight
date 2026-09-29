@@ -1,0 +1,7 @@
+# Optional: local semantic code search (ONNX embedding model, no PyTorch, no GPU).
+#   python3 -m pip install -r requirements-semantic.txt   (or: python3 staticsight.py --install --semantic)
+# Kept in sync with the "semantic" extra in staticsight-py/pyproject.toml by a test.
+-r requirements.txt
+onnxruntime>=1.17
+tokenizers>=0.15
+numpy>=1.24

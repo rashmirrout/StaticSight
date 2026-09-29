@@ -1,0 +1,5 @@
+router:
+  queues: 4
+  retry:
+    attempts: 5
+    backoff_seconds: 0.5

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="712" viewBox="0 0 1060 712" role="img" aria-label="Copilot CLI session using the StaticSight MCP tools to review C++ changes">
+<rect width="1060" height="712" rx="10" fill="#0d1117" stroke="#30363d"/>
+<rect width="1060" height="34" rx="10" fill="#161b22"/><rect y="24" width="1060" height="10" fill="#161b22"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f56"/><circle cx="40" cy="17" r="6" fill="#ffbd2e"/><circle cx="60" cy="17" r="6" fill="#27c93f"/>
+<text x="530" y="22" text-anchor="middle" fill="#8b949e" font-family="sans-serif" font-size="13">GitHub Copilot CLI + StaticSight MCP (illustrative; tool results are real fixture output)</text>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13.5" xml:space="preserve">
+<text x="20" y="52"><tspan fill="#3fb950">~/src/cpp-sample (feature)</tspan><tspan fill="#8b949e"> $ </tspan><tspan fill="#c9d1d9">copilot</tspan></text>
+<text x="20" y="92"><tspan fill="#79c0ff">&gt; Review my changes. What did I miss, and could anything break?</tspan></text>
+<text x="20" y="132"><tspan fill="#d2a8ff">● staticsight-review_changes</tspan><tspan fill="#8b949e">  base: merge-base with origin/main (7cd1f773cb)</tspan></text>
+<text x="20" y="152"><tspan fill="#8b949e">  └ 6 C/C++ files changed (+30 / -1) · cppcheck 1 error · 1 leak path · 2 ignored results · 1 lock cycle</tspan></text>
+<text x="20" y="172"><tspan fill="#d2a8ff">● staticsight-get_branch_skeleton</tspan><tspan fill="#8b949e">  src/router.cpp  Router::process_packet</tspan></text>
+<text x="20" y="192"><tspan fill="#8b949e">  └ [L13] </tspan><tspan fill="#ff7b72">RETURN -2  early exit; `buffer` (L11) not released on this path</tspan></text>
+<text x="20" y="212"><tspan fill="#d2a8ff">● staticsight-track_struct_risks</tspan><tspan fill="#8b949e">  Packet</tspan></text>
+<text x="20" y="232"><tspan fill="#8b949e">  └ 4 sites: socket.cpp:6 send(...sizeof(Packet)), socket.cpp:9, wal.cpp:5, wal.cpp:9 memcpy</tspan></text>
+<text x="20" y="252"><tspan fill="#d2a8ff">● staticsight-track_state_mutations</tspan><tspan fill="#8b949e">  route_count</tspan></text>
+<text x="20" y="272"><tspan fill="#8b949e">  └ </tspan><tspan fill="#e3b341">Inconsistent locking: router.cpp:34 (read), router.cpp:38 (write) without route_mutex</tspan></text>
+<text x="20" y="292"><tspan fill="#d2a8ff">● staticsight-track_lock_order</tspan><tspan fill="#8b949e">  (whole repository)</tspan></text>
+<text x="20" y="312"><tspan fill="#8b949e">  └ </tspan><tspan fill="#ff7b72">Deadlock cycle: rebalance() takes pool→stats, report() takes stats→pool via drain()</tspan></text>
+<text x="20" y="332"><tspan fill="#d2a8ff">● staticsight-get_upstream_callers</tspan><tspan fill="#8b949e">  process_packet</tspan></text>
+<text x="20" y="352"><tspan fill="#8b949e">  └ 3 call sites · listener.cpp:17 and test_router.cpp:6 ignore the int result</tspan></text>
+<text x="20" y="392"><tspan fill="#ffa657">Blockers</tspan></text>
+<text x="20" y="412"><tspan fill="#c9d1d9"> 1. src/router.cpp:13  new early `return -2` leaks `buffer` from malloc at L11</tspan></text>
+<text x="20" y="432"><tspan fill="#8b949e">    evidence: cppcheck memleak (CWE-401) on a changed line + skeleton. fix: free(buffer) before return,</tspan></text>
+<text x="20" y="452"><tspan fill="#8b949e">    or move the encryption check above the allocation.</tspan></text>
+<text x="20" y="472"><tspan fill="#c9d1d9"> 2. src/net/packet.hpp:8  new `checksum` field changes sizeof(Packet); socket.cpp:6 sends raw bytes</tspan></text>
+<text x="20" y="492"><tspan fill="#8b949e">    and wal.cpp:5/9 memcpy it: wire and WAL formats break for older peers/records. fix: version the</tspan></text>
+<text x="20" y="512"><tspan fill="#8b949e">    format or serialize per field; add static_assert(sizeof(Packet) == ...).</tspan></text>
+<text x="20" y="532"><tspan fill="#c9d1d9"> 3. src/router.cpp:34/38  get_route_count() lost its lock and reset() writes route_count bare,</tspan></text>
+<text x="20" y="552"><tspan fill="#8b949e">    while process_packet/reconfigure_routes hold route_mutex: data race. fix: take the lock.</tspan></text>
+<text x="20" y="572"><tspan fill="#c9d1d9"> 4. src/net/conn_pool.cpp:31  report() holds stats_mutex while drain() takes pool_mutex: the reverse</tspan></text>
+<text x="20" y="592"><tspan fill="#8b949e">    of rebalance() (pool, then stats), so the two can deadlock; it also send()s while locked. fix: one order.</tspan></text>
+<text x="20" y="612"><tspan fill="#ffa657">Major</tspan></text>
+<text x="20" y="632"><tspan fill="#c9d1d9"> 5. listener.cpp:17 ignores process_packet() result; new -2 error path is silently dropped.</tspan></text>
+<text x="20" y="672"><tspan fill="#ff7b72">Verdict: not ready to merge (4 blockers). </tspan><tspan fill="#c9d1d9">First fix the leak at router.cpp:13.</tspan></text>
+</g>
+</svg>

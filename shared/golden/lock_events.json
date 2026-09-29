@@ -1,0 +1,22 @@
+[
+  ["std::lock_guard<std::mutex> g(m_mu);", [["acquire", "lock_guard", ["m_mu"], true]]],
+  ["std::unique_lock<std::mutex> lk(mu, std::defer_lock);", []],
+  ["std::scoped_lock both(a, b);", [["acquire", "scoped_lock", ["a", "b"], true]]],
+  ["std::shared_lock<std::shared_mutex> r{this->table_mu};", [["acquire", "shared_lock", ["table_mu"], true]]],
+  ["EnterCriticalSection(&m_cs);", [["acquire", "EnterCriticalSection", ["m_cs"], false]]],
+  ["LeaveCriticalSection(&m_cs);", [["release", "LeaveCriticalSection", ["m_cs"], false]]],
+  ["AcquireSRWLockShared(&this->m_lock);", [["acquire", "AcquireSRWLockShared", ["m_lock"], false]]],
+  ["ReleaseSRWLockExclusive(&ctx->lock);", [["release", "ReleaseSRWLockExclusive", ["ctx.lock"], false]]],
+  ["if (TryAcquireSRWLockExclusive(&l)) {", []],
+  ["CAutoLock lock(&m_cs);", [["acquire", "CAutoLock", ["m_cs"], true]]],
+  ["SocketGuard g(sock);", []],
+  ["VfpScopedAutoLock l(/*AcquireLock*/ true);", []],
+  ["if (auto sp = weak.lock()) {", []],
+  ["mu.lock();", [["acquire", ".lock()", ["mu"], false]]],
+  ["m_ctx->mu.lock_shared();", [["acquire", ".lock_shared()", ["m_ctx.mu"], false]]],
+  ["mu.unlock();", [["release", ".unlock()", ["mu"], false]]],
+  ["std::lock(m1, m2);", [["acquire", "std::lock", ["m1", "m2"], false]]],
+  ["x = compute(); mu.lock(); y = 1;", [["acquire", ".lock()", ["mu"], false]]],
+  ["a.lock(); b.lock();", [["acquire", ".lock()", ["a"], false], ["acquire", ".lock()", ["b"], false]]],
+  ["{ m.lock(); m.lock(); }", [["acquire", ".lock()", ["m"], false], ["acquire", ".lock()", ["m"], false]]]
+]

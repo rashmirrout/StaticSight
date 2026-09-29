@@ -1,0 +1,2 @@
+# Fixture files are byte-exact test data (CRLF, BOM and UTF-16 files are intentional). Never convert them.
+* -text

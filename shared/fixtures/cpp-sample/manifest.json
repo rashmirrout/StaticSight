@@ -1,0 +1,14 @@
+{
+  "description": "Deterministic C++ fixture repository with seeded review bugs. Build it with make_fixture.py (Python) or test/helpers.ts (TypeScript). Commit SHAs are stable because identity, dates and file bytes are fixed.",
+  "identity": { "name": "Fixture", "email": "fixture@example.com", "date": "2024-01-01T00:00:00Z" },
+  "steps": [
+    { "op": "init", "branch": "main" },
+    { "op": "copy", "from": "base" },
+    { "op": "commit", "message": "base" },
+    { "op": "ref", "name": "refs/remotes/origin/main" },
+    { "op": "checkout", "branch": "feature" },
+    { "op": "copy", "from": "feature" },
+    { "op": "commit", "message": "feature: encryption gate, checksum field, reset()" },
+    { "op": "copy", "from": "worktree" }
+  ]
+}
