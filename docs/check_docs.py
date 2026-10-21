@@ -166,7 +166,7 @@ def check_commands(impl: str, python: str, keep: bool) -> tuple[list[str], int]:
             args = shlex.split(line, comments=True)
             if args[0] == "cd":
                 continue  # handled below, relative to the previous command's folder
-            if args == ["staticsight"] or args[1:2] in (["stdio"], ["sse"], ["streamable-http"]):
+            if args == ["staticsight"] or args[1:2] in (["stdio"], ["sse"], ["streamable-http"], ["serve"]):
                 continue  # starts the server; it would wait for a client
             if not semantic_ok and any(w in args[1:3] for w in SEMANTIC_WORDS):
                 print(f"  skip (no numpy for {python}): {line}")

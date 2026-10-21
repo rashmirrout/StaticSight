@@ -6,10 +6,11 @@ import { balancedParens, extractLeadingComment, stripCode } from "../core/cppTex
 import { cmpStr, DEFINITION_KINDS, FUNCTION_KINDS, innermost, Tag, tryCtagsForFiles, TYPE_KINDS } from "../engines/ctags.js";
 import { matchesGlob, readLines } from "../core/paths.js";
 import { rgSearch } from "../engines/rg.js";
-import { InvalidArgument } from "../core/errors.js";
+import { InvalidArgument, StaticSightError } from "../core/errors.js";
 import * as gnuGlobal from "../engines/gnuGlobal.js";
 import type { Hit } from "../engines/gnuGlobal.js";
 import { getIndexer } from "../indexer.js";
+import { record } from "./findings.js";
 
 const IDENT = /^[A-Za-z_~][A-Za-z0-9_]*$/;
 export const GLOBAL_LINE = gnuGlobal.GLOBAL_LINE;
@@ -157,7 +158,8 @@ export async function callersReport(cfg: Config, symbol: string, pathGlob = ""):
   }
   const title = `### 📞 UPSTREAM CALLERS: \`${sym}\``;
   if (!rows.length) {
-    return `${title}\n✅ No call sites found (source: ${source}). The symbol may be unused, called via macro, or only referenced dynamically.`;
+    const vnote = await virtualNote(cfg, sym);
+    return `${title}\n✅ No call sites found (source: ${source}). The symbol may be unused, called via macro, or only referenced dynamically.` + (vnote ? `\n${vnote}` : "");
   }
   const files = [...new Set(rows.map((r) => r[0]))].sort(cmpStr);
   const ignored = rows.filter((r) => r[3].startsWith("⚠️")).length;
@@ -174,7 +176,9 @@ export async function callersReport(cfg: Config, symbol: string, pathGlob = ""):
       entry.push(`**\`${path}\`**`);
       cur = path;
     }
-    entry.push(`${i + 1}. L${line} in \`${caller}\`${usage ? ` — ${usage}` : ""}`);
+    let suffix = usage ? ` — ${usage}` : "";
+    if (usage.startsWith("⚠️")) suffix += ` \`${record("ignored_result", "medium", path, line, sym, `\`${caller}\` ignores the result of \`${sym}\``, caller)}\``;
+    entry.push(`${i + 1}. L${line} in \`${caller}\`${suffix}`);
     entry.push(`   ${md.codeSpan(text)}`);
     items.push(entry.join("\n"));
   });
@@ -185,7 +189,27 @@ export async function callersReport(cfg: Config, symbol: string, pathGlob = ""):
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || cmpStr(a[0], b[0])).slice(0, 8);
     shown.push("_Top files: " + top.map(([p, n]) => `\`${p}\` (${n})`).join(", ") + "._");
   }
-  return [...head, "", ...shown].join("\n");
+  const vnote = await virtualNote(cfg, sym);
+  return [...head, "", ...shown, ...(vnote ? [vnote] : [])].join("\n");
+}
+
+async function virtualNote(cfg: Config, sym: string): Promise<string> {
+  try {
+    const gq = await import("../graph/query.js");
+    const { getGraph } = await import("../graph/store.js");
+    const g = getGraph(cfg);
+    const [, usable] = await g.ensureFresh();
+    if (!usable) return "";
+    const db = g.db;
+    const fns = gq.functionsNamed(db, sym, false).filter((f) => f.cls);
+    const virt = fns.filter((f) => /\b(virtual|override|pure)\b/.test(f.properties));
+    if (!virt.length) return "";
+    const family = [...new Set([...virt.map((f) => f.qualified), ...virt.flatMap((f) => gq.overridesOf(db, f).map((o) => o.qualified))])].sort();
+    return "\nℹ️ `" + sym + "` is virtual (" + family.slice(0, 6).map((q) => "`" + q + "`").join(", ") + '): calls through a base pointer reach every override. `get_impact("' + sym + '")` resolves them through the class hierarchy.';
+  } catch (e) {
+    if (e instanceof StaticSightError) return "";
+    throw e;
+  }
 }
 
 export async function get_upstream_callers(args: { symbol: string; path_glob?: string }): Promise<string> {
@@ -259,7 +283,7 @@ function qualifiers(decl: string): string[] {
   return QUALIFIERS.filter(([, rx]) => rx.test(head)).map(([n]) => n);
 }
 
-function obligations(doc: string[]): string[] {
+export function obligations(doc: string[]): string[] {
   const out: string[] = [];
   let cur: string | null = null;
   for (const line of [...doc, ""]) {

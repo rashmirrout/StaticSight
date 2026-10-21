@@ -67,8 +67,11 @@ build.
 `GPATH`) of all definitions and references in the repository. Once built, questions like "all call sites of
 `process_packet`" are answered in milliseconds:
 
-- `global -xr -- process_packet`: every **reference**, as `name line path text`.
-- `global -xd -- process_packet`: every **definition**.
+- `global --result=ctags -r -- process_packet`: every **reference**, as tab-delimited `name`, `path`, `line`.
+- `global --result=ctags -d -- process_packet`: every **definition**.
+
+StaticSight reads the indicated source line itself. The tab-delimited form is important on Windows and in any
+repository whose folders or files contain spaces; `global -x` cannot represent those paths unambiguously.
 
 Building the database takes seconds for small repositories and a few minutes for very large ones. The MCP server builds
 it **in the background** after the handshake and refreshes it incrementally every five minutes, so the agent never waits.

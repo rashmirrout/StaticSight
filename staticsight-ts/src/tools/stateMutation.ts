@@ -9,6 +9,7 @@ import { readLines, resolveInWorkspace } from "../core/paths.js";
 import { rgSearch } from "../engines/rg.js";
 import { InvalidArgument } from "../core/errors.js";
 import { normalizeSymbol } from "./graphGtags.js";
+import { record } from "./findings.js";
 
 const LOCK_DECL = /\b(lock_guard|unique_lock|scoped_lock|shared_lock)\b/;
 const ATOMIC_DECL = /\bstd::atomic\b|\batomic\s*<|\b_Atomic\b|\batomic_\w+\b/;
@@ -108,7 +109,10 @@ export async function stateMutationsReport(cfg: Config, symbol: string, filePath
         if (locks.length) {
           const [kind, ln] = locks[locks.length - 1];
           sync = `🔒 ${kind} (L${ln})`;
-          if ((access === "write" || access === "mutating call") && kind === "shared_lock") sync += " ⚠️ shared lock for a write";
+          if ((access === "write" || access === "mutating call") && kind === "shared_lock") {
+            const fid = record("shared_lock_write", "medium", path, m.line, sym, "`" + sym + "` is written under a shared/read lock in `" + (fn ? fn.qualified : "(file scope)") + "`", fn ? fn.qualified : "");
+            sync += " ⚠️ shared lock for a write `" + fid + "`";
+          }
         } else sync = "❌ BARE";
       }
       rows.push({ path, line: m.line, fn: fn ? fn.qualified : "(file scope)", access, sync, text: lines[m.line - 1] });
@@ -127,6 +131,10 @@ export async function stateMutationsReport(cfg: Config, symbol: string, filePath
   if (atomicDecl) out.push("⚛️ Declared atomic: individual operations are race-free, but check compound read-modify-write sequences.");
   else if (locked.length && bare.length) {
     const where = bare.slice(0, 5).map((r) => `\`${r.path}:${r.line}\` (${r.fn}, ${r.access})`).join(", ");
+    for (const r of bare) {
+      const fid = record("unlocked_access", "medium", r.path, r.line, sym, "`" + sym + "` is accessed without a lock in `" + r.fn + "` while other accesses are locked", r.fn);
+      r.sync += " `" + fid + "`";
+    }
     out.push(
       `⚠️ **Inconsistent locking:** accessed under a lock in ${locked.length} place(s) but without one in ${bare.length}: ${where}. ` +
         "Potential data race if these run concurrently.",
@@ -135,7 +143,8 @@ export async function stateMutationsReport(cfg: Config, symbol: string, filePath
     out.push("ℹ️ No lock protects any access. If this state is shared across threads it is unsynchronised.");
   }
   const body = rows.map((r) => `| \`${r.path}:${r.line}\` | \`${r.fn}\` | ${r.access} | ${r.sync} | \`${cell(r.text)}\` |`);
-  out.push("", "| Location | Function | Access | Sync | Code |", "|---|---|---|---|---|", ...md.truncateList(body, cfg.maxResults, "accesses", "Pass file_path to focus on one file."));
+  const header = ["| Location | Function | Access | Sync | Code |", "|---|---|---|---|---|"];
+  out.push("", ...header, ...md.truncateList(body, cfg.maxResults, "accesses", "Pass file_path to focus on one file.", header.slice(1)));
   out.push("\n_Heuristic: lock scope inferred from RAII guards/.lock() inside the enclosing function; locks held by callers are not visible._");
   return out.join("\n");
 }

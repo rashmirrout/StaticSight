@@ -32,6 +32,6 @@ async def test_stdio_roundtrip(workspace):
             res = await session.call_tool("get_enclosing_scope", {"file_path": "/etc/passwd", "target_line": 1})
             assert "outside the workspace" in res.content[0].text
             prompts = (await session.list_prompts()).prompts
-            assert [p.name for p in prompts] == ["review_cpp_changes"]
+            assert [p.name for p in prompts] == ["review_cpp_changes", "investigate_hang", "investigate_incident", "plan_refactor", "onboard_me"]
             prompt = await session.get_prompt("review_cpp_changes", {"focus": "locking"})
             assert "Pay special attention to: locking." in prompt.messages[0].content.text

@@ -22,7 +22,7 @@ _KIND_PRIORITY = {"function": 0, "struct": 1, "class": 1, "union": 1, "enum": 2,
 
 CTAGS_ARGS = [
     "--output-format=json",
-    "--fields=+neKSZ",
+    "--fields=+neKSZi",
     "--kinds-C++=+p",
     "--sort=no",
     "--language-force=C++",
@@ -45,6 +45,8 @@ class Tag:
     signature: str = ""
     typeref: str = ""
     pattern: str = ""
+    inherits: str = ""      # base classes (C++ mode)
+    properties: str = ""    # virtual, pure, override, static, ... (when this ctags supports it)
 
     @property
     def qualified(self) -> str:
@@ -107,9 +109,22 @@ def _parse(stdout: str) -> dict[str, list[Tag]]:
                 signature=str(d.get("signature", "")),
                 typeref=str(d.get("typeref", "")),
                 pattern=str(d.get("pattern", "")),
+                inherits=_anon(str(d.get("inherits", ""))),
+                properties=str(d.get("properties", "")),
             )
         )
     return by_path
+
+
+_PROPS: list[bool] = []
+
+
+async def _cpp_args() -> list[str]:
+    """CTAGS_ARGS plus the C++ `properties` field when this Universal Ctags has it (probed once)."""
+    if not _PROPS:
+        res = await run_engine("ctags", ["--list-fields=C++"], cwd=".", timeout=10)
+        _PROPS.append(res.returncode == 0 and re.search(r"\bproperties\b", res.stdout) is not None)
+    return CTAGS_ARGS[:2] + (["--fields-C++=+{properties}"] if _PROPS[0] else []) + CTAGS_ARGS[2:]
 
 
 def _arg(rel: str) -> str:
@@ -121,7 +136,6 @@ async def ctags_for_files(cfg: Config, rel_paths: Sequence[str], generic: bool =
 
     generic=False parses every file as C++ (the review tools); generic=True lets ctags detect each file's language.
     """
-    args = CTAGS_GENERIC_ARGS if generic else CTAGS_ARGS
     mode = "g:" if generic else "c:"
     result: dict[str, list[Tag]] = {}
     todo: list[str] = []
@@ -141,6 +155,7 @@ async def ctags_for_files(cfg: Config, rel_paths: Sequence[str], generic: bool =
             todo.append(rel)
     if todo:
         await ensure_ctags()
+        args = CTAGS_GENERIC_ARGS if generic else await _cpp_args()
     for i in range(0, len(todo), 200):
         batch = todo[i : i + 200]
         res = await run_engine("ctags", args + [_arg(r) for r in batch], cwd=cfg.workspace_root, timeout=cfg.timeout_s)
@@ -167,7 +182,7 @@ async def ctags_for_file(cfg: Config, rel_path: str) -> list[Tag]:
 async def ctags_for_temp(cfg: Config, abs_path: Path, logical_path: str) -> list[Tag]:
     """Run ctags on a file outside the workspace (e.g. an old git blob) and relabel its path."""
     await ensure_ctags()
-    res = await run_engine("ctags", CTAGS_ARGS + [str(abs_path)], cwd=abs_path.parent, timeout=cfg.timeout_s)
+    res = await run_engine("ctags", await _cpp_args() + [str(abs_path)], cwd=abs_path.parent, timeout=cfg.timeout_s)
     tags = [t for ts in _parse(res.stdout).values() for t in ts]
     return [Tag(**{**t.__dict__, "path": logical_path}) for t in tags]
 

@@ -9,6 +9,8 @@ from ..core.paths import read_lines, resolve_in_workspace
 from ..engines.cppcheck import MSVC_ARGS, SEVERITY_ORDER, Finding, parse_cppcheck_xml, run_cppcheck, wants_msvc
 from ..engines.ctags import FUNCTION_KINDS, innermost, try_ctags_for_files
 from ..engines.git import changed_lines, collect_diff
+from ..engines.cppcheck_lib import project_library
+from .findings import record
 
 __all__ = ["Finding", "parse_cppcheck_xml", "run_file_static_audit", "static_audit_report"]
 
@@ -20,9 +22,11 @@ async def static_audit_report(cfg: Config, file_path: str, only_changed_lines: b
     lines = read_lines(abs_path)
 
     msvc = wants_msvc("\n".join(lines))
+    lib, pairs = await project_library(cfg)
+    extra = (MSVC_ARGS if msvc else []) + ([f"--library={lib}"] if lib else [])
 
     async def run(include: bool):
-        return await run_cppcheck(cfg, rel, abs_path, include, MSVC_ARGS if msvc else None)
+        return await run_cppcheck(cfg, rel, abs_path, include, extra or None)
 
     findings, elsewhere, version, parse_problem, macros = await run(True)
     retried = False
@@ -73,6 +77,10 @@ async def static_audit_report(cfg: Config, file_path: str, only_changed_lines: b
             mark = "✏️ " if w == "diff" else ("🔶 " if w == "fn" else "")
             cwe = f" (CWE-{f.cwe})" if f.cwe and f.cwe != "0" else ""
             entry = [f"{i}. {mark}**L{f.line}** `[{f.severity}: {f.id}]` {f.msg}{cwe}"]
+            if f.severity in ("error", "warning"):
+                fid = record("cppcheck", "strong" if f.severity == "error" else "medium", rel, f.line, f.id, f.msg,
+                             function=getattr(innermost(tags, f.line, FUNCTION_KINDS), "qualified", ""))
+                entry[0] += f" `{fid}`"
             if 0 < f.line <= len(lines):
                 entry.append(f"   {md.code_span(lines[f.line - 1])}")
             extra_locs = [loc for loc in f.locations[1:] if loc[1] != f.line]
@@ -90,6 +98,9 @@ async def static_audit_report(cfg: Config, file_path: str, only_changed_lines: b
         notes.append(f"re-ran without include paths because included headers could not be parsed{macro_txt}")
     if parse_problem:
         notes.append(f"cppcheck could not fully parse this file{macro_txt}, so coverage is partial; pass defines via STATICSIGHT_CPPCHECK_ARGS")
+    if pairs:
+        shown = ", ".join(f"`{p.alloc}`/`{p.release}`" for p in pairs[:3]) + (f" +{len(pairs) - 3} more" if len(pairs) > 3 else "")
+        notes.append(f"project allocators from contract comments: {shown}")
     notes.append("zero-compile mode: includes are best-effort and missing-include diagnostics are suppressed")
     out.append("\n_" + "; ".join(notes) + ". ✏️ = on a changed line, 🔶 = inside a changed function._")
     return "\n".join(out)

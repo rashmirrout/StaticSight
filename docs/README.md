@@ -19,7 +19,7 @@ Every guide has separate 🐧 **Linux · macOS** and 🪟 **Windows** instructio
 | Page | What you get |
 |---|---|
 | 🧭 [Getting started](getting-started.md) | What to install and why, one script or by hand (🐧 / 🪟), `doctor` check, first review, connect your AI agent. |
-| ⌨️ [Command-line guide](cli-guide.md) | Every command, option and environment variable, with real output. Run any of the 16 tools yourself. |
+| ⌨️ [Command-line guide](cli-guide.md) | Every command, option and environment variable, with real output. Run any of the 33 tools yourself. |
 | 🧠 [Semantic search: manual guide](semantic-search/manual-guide.md) | Model download, build, search, similar code, refresh, troubleshooting. |
 
 ## 🤖 See how an agent uses it
@@ -28,9 +28,10 @@ Every guide has separate 🐧 **Linux · macOS** and 🪟 **Windows** instructio
 |---|---|
 | 🔌 [MCP guide](mcp-guide.md) | Server start, handshake, tool discovery, a tool call on the wire, errors, budgets, how the agent chains tools. |
 | 🔄 [Semantic search: MCP flow](semantic-search/mcp-flow.md) | Inside one `semantic_search` call: freshness check, refresh policy, ranking, answer. |
-| 🧰 [MCP tool reference](MCP_TOOLS.md) | All 16 tools: parameters, method, output, limits. |
+| 🧰 [MCP tool reference](MCP_TOOLS.md) | All 33 tools and 5 prompts: parameters, method, output, limits. |
+| 🕸️ [The code graph](code-graph.md) | What the graph stores, how calls are resolved, and how it stays fresh after `git pull` without you doing anything. |
 | 🛠️ [Raw commands](COMMANDS.md) | Every engine command StaticSight runs, per tool. |
-| 📊 [Benchmarks](benchmarks.md) | Tokens, precision and depth versus text search, measured on a real code base; run it on yours. |
+| 📊 [Benchmarks](benchmarks.md) | Tokens, precision and depth versus text search, measured on a real code base; planted-bug evaluation for agents; run both on yours. |
 
 ## 📖 Understand why
 
@@ -39,6 +40,14 @@ Every guide has separate 🐧 **Linux · macOS** and 🪟 **Windows** instructio
 | 📖 [The StaticSight book](book/00-preface.md) | The whole story in order: the problem, the principles, the engines, the architecture, a review step by step, each tool, semantic search, cross-platform, testing, AI integration, limits and roadmap. |
 | ⚙️ [Semantic search internals](semantic-search/internals.md) | Chunking, model, hybrid ranking, storage, configuration, performance. |
 | 🧪 [Learn and experiment](semantic-search/experiments.md) | A standalone script that explains every step of a search, SQL on the index, experiments to try. |
+
+## 🛠️ Work on StaticSight itself
+
+| Page | What you get |
+|---|---|
+| 🧑‍💻 [Developer guide](developer-guide.md) | Virtual environments with uv (or venv + pip), `uv sync`, npm, running both test suites, golden files, docs checks, parity and eval scripts, changing dependencies, adding a tool, CI, troubleshooting (🐧 / 🪟). |
+| 🔭 [Future scope](future-scope.md) | The strategic direction: real historical-bug evaluation, root-cause findings, interprocedural ownership/errors/locks, repository rules, PR/CI integration, releases and performance. |
+| ✅ [Contributor tracker](contributor-tracker.md) | Ready and dependency-blocked work items with stable IDs, scope, acceptance checks and copy-ready AI implementation prompts. |
 
 ## 📝 Conventions used in these pages
 

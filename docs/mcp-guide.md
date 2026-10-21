@@ -71,7 +71,7 @@ sequenceDiagram
     C->>S: notifications/initialized
     S-)G: start indexing into .staticsight/ (does not block)
     C->>S: tools/list
-    S-->>C: 16 tools: name, description, input schema, annotations
+    S-->>C: 33 tools: name, description, input schema, annotations
     C->>S: prompts/list
     S-->>C: review_cpp_changes(focus?)
 ```
@@ -80,7 +80,7 @@ The real `initialize` exchange (instructions shortened):
 
 ```text
 >>> {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "demo", "version": "1"}}}
-<<< {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "capabilities": {"experimental": {}, "prompts": {"listChanged": false}, "resources": {"subscribe": false, "listChanged": false}, "tools": {"listChanged": false}}, "serverInfo": {"name": "StaticSight", "version": "1.30.0"}, "instructions": "StaticSight gives you zero-compile, high-fidelity evidence about an uncompiled C++ repository (Universal Ctags, GNU Global, ripgrep, cppcheck, git). For a code …"}}
+<<< {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "capabilities": {"experimental": {}, "prompts": {"listChanged": false}, "resources": {"subscribe": false, "listChanged": false}, "tools": {"listChanged": false}}, "serverInfo": {"name": "StaticSight", "version": "1.30.0"}, "instructions": "StaticSight gives you zero-compile, high-fidelity evidence about an uncompiled C++ repository (Universal Ctags, GNU Global, ripgrep, cppcheck, git, a code graph and local semantic search). For a code …"}}
 ```
 
 The **instructions** are a short, server-wide briefing that many clients add to the agent's context: what StaticSight
@@ -92,7 +92,7 @@ ripgrep fallback and say so.
 
 ## 3. Tool discovery: what the agent sees
 
-`tools/list` returns the 16 tools. One of them, as the agent receives it (description shortened):
+`tools/list` returns the 33 tools. One of them, as the agent receives it (description shortened):
 
 ```json
 {"name": "get_upstream_callers",
@@ -126,8 +126,9 @@ sequenceDiagram
     C->>S: tools/call get_upstream_callers {"symbol": "process_packet"}
     S->>W: validate arguments against the schema
     W->>T: run
-    T->>E: global -xr process_packet (argv list, no shell)
-    E-->>T: text lines
+    T->>E: global --result=ctags -r -- process_packet (argv list, no shell)
+    E-->>T: tab-delimited path + line
+    T->>E: read the source line
     T->>E: ctags --output-format=json on caller files
     E-->>T: JSON scopes
     T-->>W: Markdown
@@ -148,7 +149,8 @@ Inside the server, every call goes through the same steps:
    workspace (symlink escapes are refused). Symbols are validated as C++ identifiers before they reach a command line.
 2. **Run engines.** Commands are started directly with an argument list, never through a shell, with a timeout
    (`STATICSIGHT_TIMEOUT`). User input goes after `--`. ctags and ripgrep produce JSON, cppcheck XML; only
-   `global -x` output is parsed as text.
+   GNU Global's tab-delimited ctags output is parsed as text; StaticSight reads the source line separately so paths
+   containing spaces remain unambiguous.
 3. **Analyse.** The tool combines the engine outputs (for example: which function encloses each call, is the return
    value used) into typed records.
 4. **Render.** The records become concise Markdown: headings, `file:line`, the evidence line, markers such as ⚠️,
@@ -156,6 +158,33 @@ Inside the server, every call goes through the same steps:
 5. **Budget.** Lists are capped (15 items by default, then "…and N more"), and the whole answer is cut to
    `STATICSIGHT_MAX_CHARS` (6,000 characters; 16,000 for `review_changes`), keeping code fences balanced. This keeps
    the agent's context small and focused.
+
+### Findings travel as data too
+
+When a result contains findings (a leak, a cppcheck error, an ignored result, a lock cycle, a switch gap, …), the
+Markdown shows their IDs and the result also carries them as **structured content**, so a client or a script can
+use them without parsing text:
+
+```text
+>>> {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "find_switch_coverage", "arguments": {"enum_name": "MsgType"}}}
+<<< {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "### 🧩 SWITCH COVERAGE: `MsgType`\n_Code graph up to date (28 files)._\nDefined at `src/net/proto.hpp:3` with 5 values: …\n- ⚠️ `src/net/proto.cpp:31` in `msg_name`: missing `Ping`; handled by `default:` — check that is right `F7b1502`"}], "structuredContent": {"findings": [{"id": "F7b1502", "kind": "switch_gap", "confidence": "medium", "path": "src/net/proto.cpp", "line": 31, "symbol": "MsgType", "message": "switch in msg_name misses Ping (falls into default)", "function": "msg_name"}]}, "isError": false}}
+```
+
+The ID is stable (a hash of kind, file, line and symbol), so the agent can come back to it: `verify_finding("F7b1502")`
+re-runs the producing call on the current code and answers reproduced, moved or gone. Results without findings are
+plain text, exactly as before.
+
+### Long lists continue on demand
+
+A list cut at `STATICSIGHT_MAX_RESULTS` ends with `Next: get_more("P2f6f66")`. The rest is stored in
+`.staticsight/pages/`, and the agent fetches it only if it needs it, 40 items at a time. The first answer stays small.
+
+### The graph answers are fresh
+
+Tools that read the [code graph](code-graph.md) check it against the files on every call and re-parse what changed
+(after a `git pull`, a branch switch or the agent's own edits) before answering. The first line of their answer says
+what happened: `Code graph up to date (1873 files).` or `Code graph refreshed before answering: re-parsed 3 changed
+file(s), removed 0.` The agent never has to ask for a rebuild.
 
 ## 5. When things go wrong
 
@@ -179,7 +208,7 @@ The agent decides on its own, from four sources of guidance:
 |---|---|---|
 | Server instructions | `shared/tool-spec.json` → `server.instructions` | What StaticSight is; start reviews with `review_changes`. |
 | Tool descriptions | `shared/tool-spec.json` → each tool | What each tool returns and when to use it. |
-| MCP prompt | `review_cpp_changes(focus?)`, from `shared/prompts/review_cpp_changes.md` | A step-by-step review workflow and checklist, for clients that support prompts. |
+| MCP prompts | `review_cpp_changes(focus?)`, `investigate_hang(symptom?)`, `investigate_incident(log_text?)`, `plan_refactor(symbol?, change?)`, `onboard_me(area?)`, from `shared/prompts/` | Step-by-step workflows for a review, a hang, an incident, a refactor and learning an area, for clients that support prompts (often as slash commands). |
 | Copilot skill and instruction | `.github/skills/staticsight-cpp-review/SKILL.md`, `.github/instructions/staticsight-cpp.instructions.md` | How to review with StaticSight, how to read the markers, the report format; "prefer evidence over guessing" for C/C++ files. |
 
 A typical review, as the agent chains it:
@@ -196,7 +225,19 @@ flowchart TD
     D -->|locks added or reordered| O[track_lock_order]
     D -->|a called function's rules| T[get_symbol_contract]
     D -->|same bug elsewhere?| F[find_similar_code]
-    K & C & B & M & O & T & F --> V[Report: blockers, majors, minors,<br/>evidence file:line, fix, verdict]
+    D -->|reach and exposure| I[get_impact / find_entry_paths]
+    D -->|incomplete change?| P[find_switch_coverage / find_counterparts]
+    K & C & B & M & O & T & F & I & P --> X[verify_finding on each ID]
+    X --> V[Report: blockers, majors, minors,<br/>evidence file:line + ID, fix, verdict]
+```
+
+While **writing** code the loop is shorter:
+
+```mermaid
+flowchart LR
+    A["You: add a timeout to decode_msg"] --> P[plan_change] --> E[edit] --> C[check_my_edit]
+    C -->|findings| V[verify_finding] --> E
+    C -->|clean| R[review_changes before the commit]
 ```
 
 `review_changes` gives the overview within one budget; the individual tools give depth where the agent needs it.

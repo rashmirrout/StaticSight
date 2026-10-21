@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import contextvars
+import hashlib
+import json
+from pathlib import Path
 from typing import Iterable, Sequence
 
 LINE_CLIP = 160
+PAGE_SIZE = 40
+
+# Where `truncate_list` stores the items it had to cut, so the agent can fetch them with `get_more`.
+# Set by the tool wrapper for the duration of one call; unset (direct report calls) means no continuation.
+pages_dir: contextvars.ContextVar[Path | None] = contextvars.ContextVar("staticsight_pages", default=None)
 
 
 def clip(text: str, limit: int = LINE_CLIP) -> str:
@@ -29,13 +38,65 @@ def error_card(title: str, message: str, hint: str | None = None) -> str:
     return out
 
 
-def truncate_list(items: Sequence[str], limit: int, noun: str = "results", hint: str = "") -> list[str]:
+def truncate_list(items: Sequence[str], limit: int, noun: str = "results", hint: str = "",
+                  header: Sequence[str] = ()) -> list[str]:
+    """First `limit` items plus a note; the rest are saved for `get_more` (with `header`, e.g. a table header)."""
     if len(items) <= limit:
         return list(items)
     extra = len(items) - limit
     note = f"_…and {extra} more {noun}"
-    note += f". {hint}_" if hint else "._"
+    note += f". {hint}" if hint else "."
+    token = save_page(noun, list(items[limit:]), list(header))
+    note += f" Next: `get_more(\"{token}\")`._" if token else "_"
+    if header:
+        note = "\n" + note  # a blank line ends the table, so the note is not read as a row
     return list(items[:limit]) + [note]
+
+
+def page_token(noun: str, rest: Sequence[str]) -> str:
+    return "P" + hashlib.sha1((noun + "\n" + "\n".join(rest)).encode("utf-8")).hexdigest()[:6]
+
+
+def save_page(noun: str, rest: list[str], header: list[str] | None = None) -> str:
+    d = pages_dir.get()
+    if d is None:
+        return ""
+    token = page_token(noun, rest)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{token}.json").write_text(json.dumps({"noun": noun, "items": rest, "header": header or []}), encoding="utf-8")
+        _prune(d)
+    except OSError:
+        return ""
+    return token
+
+
+MAX_PAGES = 500
+
+
+def _prune(d: Path) -> None:
+    """Keep the newest MAX_PAGES pages: tokens are only needed for the lists an agent is still reading."""
+    try:
+        files = list(d.glob("P*.json"))
+        if len(files) <= MAX_PAGES:
+            return
+        files.sort(key=lambda f: f.stat().st_mtime_ns)
+        for f in files[: len(files) - MAX_PAGES]:
+            f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def load_page(token: str) -> tuple[str, list[str], list[str]] | None:
+    d = pages_dir.get()
+    t = token.strip()
+    if d is None or not (len(t) == 7 and t[0] == "P" and all(c in "0123456789abcdef" for c in t[1:])):
+        return None
+    try:
+        data = json.loads((d / f"{t}.json").read_text(encoding="utf-8"))
+        return str(data["noun"]), [str(x) for x in data["items"]], [str(x) for x in data.get("header", [])]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def numbered_code(lines: Sequence[str], start_line: int, mark: Iterable[int] = (), width: int | None = None) -> list[str]:

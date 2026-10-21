@@ -5,6 +5,8 @@
     { "op": "init", "branch": "main" },
     { "op": "copy", "from": "base" },
     { "op": "commit", "message": "base" },
+    { "op": "copy", "from": "fix" },
+    { "op": "commit", "message": "fix: crash on null buffer in decode_msg" },
     { "op": "ref", "name": "refs/remotes/origin/main" },
     { "op": "checkout", "branch": "feature" },
     { "op": "copy", "from": "feature" },

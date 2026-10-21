@@ -55,6 +55,8 @@ class Config:
     embed_model_dir: str = ""
     semantic_auto_refresh: bool = True
     semantic_auto_refresh_files: int = 200
+    graph_auto_refresh: bool = True
+    graph_auto_refresh_files: int = 300
     semantic_max_file_kb: int = 512
     semantic_allow_download: bool = True
     embed_batch: int = 16
@@ -110,6 +112,8 @@ def load_config() -> Config:
         embed_model_dir=os.environ.get("STATICSIGHT_EMBED_MODEL_DIR", "").strip(),
         semantic_auto_refresh=_bool_env("STATICSIGHT_SEMANTIC_AUTO_REFRESH", True),
         semantic_auto_refresh_files=max(0, _int_env("STATICSIGHT_SEMANTIC_AUTO_REFRESH_FILES", 200)),
+        graph_auto_refresh=_bool_env("STATICSIGHT_GRAPH_AUTO_REFRESH", True),
+        graph_auto_refresh_files=max(0, _int_env("STATICSIGHT_GRAPH_AUTO_REFRESH_FILES", 300)),
         semantic_max_file_kb=max(1, _int_env("STATICSIGHT_SEMANTIC_MAX_FILE_KB", 512)),
         semantic_allow_download=_bool_env("STATICSIGHT_SEMANTIC_ALLOW_DOWNLOAD", True),
         embed_batch=max(1, _int_env("STATICSIGHT_EMBED_BATCH", 16)),

@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     # FastMCP lives at mcp.server.fastmcp in the 1.x SDK (renamed to MCPServer in 2.x).
-    "mcp[cli]>=1.12,<2",
+    "mcp[cli]>=1.19,<2",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +42,7 @@ packages = ["src/staticsight"]
 "../shared/prompts" = "staticsight/_shared/prompts"
 "../shared/tool-spec.json" = "staticsight/_shared/tool-spec.json"
 "../shared/semantic" = "staticsight/_shared/semantic"
+"../shared/graph" = "staticsight/_shared/graph"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

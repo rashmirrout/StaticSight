@@ -14,7 +14,7 @@ const KIND_PRIORITY: Record<string, number> = { function: 0, struct: 1, class: 1
 
 /** Language auto-detection (any language Universal Ctags knows); used by the semantic chunker. */
 export const CTAGS_GENERIC_ARGS = ["--output-format=json", "--fields=+neKSZ", "--sort=no", "-f", "-"];
-export const CTAGS_ARGS = ["--output-format=json", "--fields=+neKSZ", "--kinds-C++=+p", "--sort=no", "--language-force=C++", "-f", "-"];
+export const CTAGS_ARGS = ["--output-format=json", "--fields=+neKSZi", "--kinds-C++=+p", "--sort=no", "--language-force=C++", "-f", "-"];
 
 export class Tag {
   constructor(
@@ -28,6 +28,8 @@ export class Tag {
     public signature = "",
     public typeref = "",
     public pattern = "",
+    public inherits = "",
+    public properties = "",
   ) {}
 
   get qualified(): string {
@@ -56,7 +58,7 @@ export class Tag {
   }
 
   withPath(path: string): Tag {
-    return new Tag(this.name, this.kind, this.line, this.end, path, this.scope, this.scopeKind, this.signature, this.typeref, this.pattern);
+    return new Tag(this.name, this.kind, this.line, this.end, path, this.scope, this.scopeKind, this.signature, this.typeref, this.pattern, this.inherits, this.properties);
   }
 }
 
@@ -93,6 +95,8 @@ function parse(stdout: string): Map<string, Tag[]> {
       String(d.signature ?? ""),
       String(d.typeref ?? ""),
       String(d.pattern ?? ""),
+      String(d.inherits ?? ""),
+      String(d.properties ?? ""),
     );
     if (!byPath.has(path)) byPath.set(path, []);
     byPath.get(path)!.push(tag);
@@ -104,9 +108,31 @@ function arg(rel: string): string {
   return rel.startsWith("-") ? "./" + rel : rel;
 }
 
+let cppArgsPromise: Promise<string[]> | null = null;
+
+async function cppArgs(): Promise<string[]> {
+  if (!cppArgsPromise) {
+    cppArgsPromise = (async () => {
+      let supportsProperties = false;
+      try {
+        const res = await runEngine("ctags", ["--list-fields=C++"], { cwd: cfgProbeCwd(), timeout: 5 });
+        supportsProperties = res.returncode === 0 && /\bproperties\b/.test(res.stdout);
+      } catch {
+        supportsProperties = false;
+      }
+
+      function cfgProbeCwd(): string {
+        return process.cwd();
+      }
+      return supportsProperties ? [...CTAGS_ARGS, "--fields-C++=+{properties}"] : CTAGS_ARGS;
+    })();
+  }
+  return cppArgsPromise;
+}
+
 /** generic=false parses every file as C++ (review tools); generic=true lets ctags detect each file's language. */
 export async function ctagsForFiles(cfg: Config, relPaths: string[], generic = false): Promise<Map<string, Tag[]>> {
-  const args = generic ? CTAGS_GENERIC_ARGS : CTAGS_ARGS;
+  const args = generic ? CTAGS_GENERIC_ARGS : await cppArgs();
   const mode = generic ? "g:" : "c:";
   const result = new Map<string, Tag[]>();
   const todo: string[] = [];
@@ -156,7 +182,7 @@ export async function ctagsForFile(cfg: Config, relPath: string): Promise<Tag[]>
 
 export async function ctagsForTemp(cfg: Config, absPath: string, logicalPath: string): Promise<Tag[]> {
   await ensureCtags();
-  const res = await runEngine("ctags", [...CTAGS_ARGS, absPath], { cwd: dirname(absPath), timeout: cfg.timeoutS });
+  const res = await runEngine("ctags", [...(await cppArgs()), absPath], { cwd: dirname(absPath), timeout: cfg.timeoutS });
   const out: Tag[] = [];
   for (const ts of parse(res.stdout).values()) for (const t of ts) out.push(t.withPath(logicalPath));
   return out;

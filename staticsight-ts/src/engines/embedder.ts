@@ -2,7 +2,8 @@
 // Same ONNX model + tokenizer.json as the Python implementation, so one index serves both.
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Config } from "../config.js";
@@ -20,6 +21,7 @@ export interface ModelSpec {
   description: string;
   repo?: string;
   revision?: string;
+  license?: string;
   dims: number;
   max_tokens: number;
   pooling: string;
@@ -27,8 +29,65 @@ export interface ModelSpec {
   files?: Record<string, string>;
 }
 
+const MODEL_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const ONNX_PATHS = new Set(["onnx/model_quantized.onnx", "onnx/model.onnx", "model.onnx"]);
+
+function validateExternalModel(name: string, value: unknown, manifest: string): ModelSpec {
+  const where = `\`${manifest}\` model \`${name}\``;
+  if (!MODEL_NAME.test(name)) throw new SemanticUnavailable(`${where} has an invalid name.`, "Use lowercase letters, digits, '.', '_' or '-'.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SemanticUnavailable(`${where} must be a JSON object.`);
+  const spec = value as Record<string, unknown>;
+  const required = ["description", "repo", "revision", "license", "dims", "max_tokens", "pooling", "onnx", "files"];
+  const missing = required.filter((k) => !(k in spec));
+  if (missing.length) throw new SemanticUnavailable(`${where} is missing: ${missing.join(", ")}.`);
+  if (typeof spec.description !== "string" || !spec.description.trim()) throw new SemanticUnavailable(`${where} has an invalid non-empty \`description\`.`);
+  if (typeof spec.license !== "string" || !spec.license.trim()) throw new SemanticUnavailable(`${where} has an invalid non-empty \`license\`.`);
+  if (typeof spec.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(spec.repo)) throw new SemanticUnavailable(`${where} has an invalid \`repo\` (expected \`owner/name\`).`);
+  if (typeof spec.revision !== "string" || !/^[0-9a-f]{40}$/.test(spec.revision)) throw new SemanticUnavailable(`${where} must pin \`revision\` to a full 40-character commit SHA.`);
+  if (!Number.isInteger(spec.dims) || Number(spec.dims) <= 0) throw new SemanticUnavailable(`${where} has an invalid positive integer \`dims\`.`);
+  if (!Number.isInteger(spec.max_tokens) || Number(spec.max_tokens) <= 0) throw new SemanticUnavailable(`${where} has an invalid positive integer \`max_tokens\`.`);
+  if (!["mean", "cls"].includes(String(spec.pooling))) throw new SemanticUnavailable(`${where} has unsupported pooling \`${spec.pooling}\` (use \`mean\` or \`cls\`).`);
+  if (typeof spec.onnx !== "string" || !ONNX_PATHS.has(spec.onnx)) throw new SemanticUnavailable(`${where} has unsupported ONNX path \`${spec.onnx}\`.`);
+  if (!spec.files || typeof spec.files !== "object" || Array.isArray(spec.files)) throw new SemanticUnavailable(`${where} has an invalid \`files\` object.`);
+  const files = spec.files as Record<string, unknown>;
+  if (!("tokenizer.json" in files) || !(spec.onnx in files)) throw new SemanticUnavailable(`${where} \`files\` must include \`tokenizer.json\` and \`${spec.onnx}\`.`);
+  for (const [rel, sha] of Object.entries(files)) {
+    if (!rel || isAbsolute(rel) || rel.includes("\\") || rel.split("/").includes("..")) throw new SemanticUnavailable(`${where} has an unsafe file path \`${rel}\`.`);
+    if (typeof sha !== "string" || !SHA256.test(sha)) throw new SemanticUnavailable(`${where} has an invalid SHA-256 for \`${rel}\`.`);
+  }
+  return spec as unknown as ModelSpec;
+}
+
+export function modelCatalog(): { defaultName: string; models: Record<string, ModelSpec>; manifest: string } {
+  const data = sharedJson<{ default: string; models: Record<string, ModelSpec> }>("semantic/models.json");
+  const models = { ...data.models };
+  const configured = (process.env.STATICSIGHT_MODEL_MANIFEST ?? "").trim();
+  if (!configured) return { defaultName: data.default, models, manifest: "" };
+  const manifest = configured.startsWith("~") ? join(homedir(), configured.slice(1)) : configured;
+  let extra: unknown;
+  try {
+    extra = JSON.parse(readFileSync(manifest, "utf8"));
+  } catch (e) {
+    throw new SemanticUnavailable(`Could not read model manifest \`${manifest}\`: ${(e as Error).message}.`);
+  }
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !(extra as any).models || typeof (extra as any).models !== "object") {
+    throw new SemanticUnavailable(`Model manifest \`${manifest}\` must contain a \`models\` object.`);
+  }
+  for (const [name, spec] of Object.entries((extra as any).models)) {
+    if (name in models) {
+      throw new SemanticUnavailable(
+        `Model manifest \`${manifest}\` cannot replace built-in model \`${name}\`.`,
+        "Choose a new model name; built-in revisions and checksums are immutable.",
+      );
+    }
+    models[name] = validateExternalModel(name, spec, manifest);
+  }
+  return { defaultName: data.default, models, manifest };
+}
+
 export function modelSpec(name: string): ModelSpec {
-  const models = sharedJson<{ models: Record<string, ModelSpec> }>("semantic/models.json").models;
+  const { models } = modelCatalog();
   if (!(name in models)) {
     throw new SemanticUnavailable(`Unknown embedding model \`${name}\`.`, `Use one of: ${Object.keys(models).sort().join(", ")} (STATICSIGHT_EMBED_MODEL).`);
   }

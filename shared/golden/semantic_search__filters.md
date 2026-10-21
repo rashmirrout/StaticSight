@@ -1,5 +1,5 @@
 ### 🔎 SEMANTIC SEARCH: "copy packet bytes"
-Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
+Index: 31 files, 72 chunks (test-hash@builtin). Index is up to date.
 1. `src/storage/wal.cpp:4-6` — function `wal_append` (cpp) · 0.18 · semantic+keyword
    ```cpp
    4 | void wal_append(uint8_t* wal_ptr, const Packet& p) {

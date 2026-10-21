@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ToolTimeout } from "../src/core/errors.js";
 import { decodeSource, matchesGlob, readLines } from "../src/core/paths.js";
-import { parseXOutput } from "../src/engines/gnuGlobal.js";
+import { parseCtagsOutput, parseXOutput } from "../src/engines/gnuGlobal.js";
 import { current, detect, PosixPlatform, use, WindowsPlatform } from "../src/platform/index.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -73,6 +73,14 @@ describe("platform layer", () => {
     try {
       const hits = parseXOutput("process_packet      9 src\\net\\listener.cpp         int rc = f();\r\n");
       expect([hits[0].path, hits[0].line, hits[0].text.trim()]).toEqual(["src/net/listener.cpp", 9, "int rc = f();"]);
+    } finally {
+      use(null);
+    }
+  });
+  it("preserves spaces and Windows separators in GNU Global ctags output", () => {
+    use(new WindowsPlatform());
+    try {
+      expect(parseCtagsOutput("process_packet\tsrc dir\\file name.cpp\t17\r\n")).toEqual([["src dir/file name.cpp", 17]]);
     } finally {
       use(null);
     }

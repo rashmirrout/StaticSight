@@ -65,6 +65,7 @@ query ──► keywords ──► rg ─────────┴─► recip
 | `STATICSIGHT_DATA_DIR` | `repo` | `repo` = `<repo>/.staticsight/`; `cache` = per-user cache; anything else = a per-repository sub-folder of that folder. |
 | `STATICSIGHT_EMBED_MODEL` | `jina-code` | Model from `shared/semantic/models.json` (`test-hash` is the deterministic test embedder). |
 | `STATICSIGHT_EMBED_MODEL_DIR` | – | Use a pre-downloaded/offline model folder (any sentence-transformers ONNX export with `tokenizer.json`). |
+| `STATICSIGHT_MODEL_MANIFEST` | – | Optional JSON file that adds pinned downloadable models. It cannot replace built-in model names. |
 | `STATICSIGHT_SEMANTIC_ALLOW_DOWNLOAD` | 1 | `0` forbids downloading the model (air-gapped machines). |
 | `STATICSIGHT_SEMANTIC_AUTO_REFRESH` | 1 | `0` = never refresh automatically; results are marked stale. |
 | `STATICSIGHT_SEMANTIC_AUTO_REFRESH_FILES` | 200 | Largest drift refreshed synchronously before answering; bigger drifts go to the background. |
@@ -77,6 +78,11 @@ query ──► keywords ──► rg ─────────┴─► recip
 Skipped automatically: binary files (NUL bytes, known binary extensions), minified or generated files (very long lines,
 `*.min.js`, `*.pb.*`, `*.designer.cs`, …), lock files (`package-lock.json`, `go.sum`, …), files over the size limit,
 and everything ignored by `.gitignore`, `STATICSIGHT_EXCLUDES` or `.staticsightignore`.
+
+Use `staticsight model list` to see the built-in and external registry. Bare `staticsight model download` always
+downloads the built-in default (`jina-code`) and needs no environment variable. `model download --model NAME`
+downloads an alternative without activating it; every non-default model requires `STATICSIGHT_EMBED_MODEL=NAME` in
+the terminal or MCP server environment, followed by `staticsight index build --full`.
 
 ## Performance
 

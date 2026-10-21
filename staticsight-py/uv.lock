@@ -1512,7 +1512,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", extras = ["cli"], specifier = ">=1.12,<2" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.19,<2" },
     { name = "numpy", marker = "extra == 'semantic'", specifier = ">=1.24" },
     { name = "onnxruntime", marker = "extra == 'semantic'", specifier = ">=1.17" },
     { name = "tokenizers", marker = "extra == 'semantic'", specifier = ">=0.15" },

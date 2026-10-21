@@ -8,7 +8,7 @@ Every number in the README's "Why StaticSight" section comes from `scripts/bench
 measures, how, and what the results on two repositories were. Run it on your own code: that is the real test.
 
 <!-- nav:toc -->
-**On this page:** [Run it](#run-it) · [What it measures](#what-it-measures) · [Results](#results) · [Honest reading of these numbers](#honest-reading-of-these-numbers)
+**On this page:** [Run it](#run-it) · [What it measures](#what-it-measures) · [Results](#results) · [Evaluate an agent on planted bugs](#evaluate-an-agent-on-planted-bugs) · [Honest reading of these numbers](#honest-reading-of-these-numbers)
 <!-- /nav:toc -->
 
 ## Run it
@@ -84,18 +84,70 @@ What we checked by hand:
 
 ### The test repository (`shared/fixtures`)
 
-17 C/C++ files with planted review bugs; `--base origin/main --samples 5`.
+27 C/C++ files with planted review bugs; `--base origin/main --samples 5`.
 
 | Measurement | Without StaticSight | With StaticSight |
 |---|---|---|
-| Review `origin/main` (5 C/C++ files) | 699 tokens to read the changed files (724 for the raw diff) | **3,489-token review bundle** (+399%), 0.4 s |
-| Header change reach (1 header) | median 7 direct `#include` lines | **median +3 more files through other headers** |
-| Struct layout change (1 struct) | 17 references to read | **4 sites where the bytes matter** (1 with the operation on a neighbouring line) |
+| Review `origin/main` (8 C/C++ files) | 1,072 tokens to read the changed files (1,009 for the raw diff) | **3,862-token review bundle** (+260%), 0.8 s |
+| Header change reach (1 header) | median 8 direct `#include` lines | **median +3 more files through other headers** |
+| Struct layout change (1 struct) | 18 references to read | **4 sites where the bytes matter** (1 with the operation on a neighbouring line) |
 | Locking (5 functions take 3 locks) | no answer from text search | **1 potential deadlock cycle, 1 lock held across a blocking call** |
 
 On a toy diff the bundle is *larger* than the changed files. That is expected: it adds the evidence that lives in
 other files (callers, the `memcpy` sites, the lock taken by `drain()`), which is exactly what the diff does not show.
 The token savings appear on real changes to real files.
+
+## Evaluate an agent on planted bugs
+
+Tokens and precision measure the tools. `scripts/eval_agent.py` measures whether the evidence reaches the **answer**.
+
+```bash
+python3 scripts/eval_agent.py                        # static mode: builds the test repository in a temp folder
+python3 scripts/eval_agent.py --only switch_gap,log_origin --json eval.json
+```
+
+Each task in [`shared/eval/tasks.json`](../shared/eval/tasks.json) is a question a developer asks about a planted bug
+("Can ConnPool deadlock?", "MsgType gained a Ping value. Is every switch updated?", "A log says … Which code printed
+it?"), the StaticSight calls that answer it, and the evidence a correct answer must name: the file, the line within ±3,
+and one keyword ("deadlock", "Ping", …). **Static mode** runs the calls and checks their output; it also counts the tokens
+of the files an assistant without StaticSight would have to read to find the same thing.
+
+Result on the test repository:
+
+| Task | Evidence in StaticSight output | StaticSight tokens | Tokens to read the files | Change |
+|---|---|---|---|---|
+| `leak_early_return` | ✅ | 3,870 | 355 | +990% |
+| `leak_project_allocator` | ✅ | 107 | 461 | −77% |
+| `lock_order_cycle` | ✅ | 314 | 191 | +64% |
+| `lock_across_send` | ✅ | 314 | 191 | +64% |
+| `switch_gap` | ✅ | 93 | 395 | −76% |
+| `platform_twin` | ✅ | 124 | 51 | +143% |
+| `unlocked_write` | ✅ | 255 | 355 | −28% |
+| `struct_layout` | ✅ | 352 | 324 | +9% |
+| `ignored_result` | ✅ | 283 | 444 | −36% |
+| `entry_exposure` | ✅ | 250 | 300 | −17% |
+| `log_origin` | ✅ | 119 | 365 | −67% |
+| `virtual_override` | ✅ | 189 | 228 | −17% |
+
+**Evidence found:** 12 of 12 tasks · **tokens:** 6,270 with StaticSight vs 3,660 to read the files (+71%) · tokenizer: estimate (characters / 4; pip install tiktoken for exact counts).
+
+_"Tokens to read the files" is a lower bound for an assistant without StaticSight: it must also find those files, and on a large repository it rarely reads all of them._
+
+On this toy repository the source files are tiny, so reading them is cheap; the point of the table is the first
+column. On real code the files are thousands of lines long and the token picture is the one in the SomeCPPRepo results.
+
+**Agent mode** grades real agents with the same rule. Pass any agent CLI as a command template; `{prompt}` becomes the
+question (shell-quoted) and the command runs inside the repository:
+
+```text
+python3 scripts/eval_agent.py \
+    --agent-cmd    'copilot -p {prompt} --allow-all-tools' \
+    --baseline-cmd 'copilot -p {prompt} --allow-all-tools --disable-mcp-server staticsight' \
+    --repeat 3
+```
+
+Two more columns appear: the share of correct answers with StaticSight and without it. Answers vary between runs, so
+use `--repeat`. With `--repo` and `--tasks` it evaluates your own repository with your own planted or historical bugs.
 
 ## Honest reading of these numbers
 
@@ -111,6 +163,6 @@ The token savings appear on real changes to real files.
 ---
 
 <!-- nav:bottom -->
-| ⬅️ [Raw commands](COMMANDS.md) | 📚 [Documentation](README.md) |   |
+| ⬅️ [Raw commands](COMMANDS.md) | 📚 [Documentation](README.md) | [Developer guide](developer-guide.md) ➡️ |
 |:---|:---:|---:|
 <!-- /nav:bottom -->

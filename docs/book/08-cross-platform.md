@@ -17,7 +17,7 @@ small interface:
 | Operation | POSIX (Linux, macOS) | Windows |
 |---|---|---|
 | Find an executable | `PATH` lookup | `PATH` lookup, **only `.exe` and `.com`** |
-| Start a process | direct exec, new process group | direct exec, new process group, no console window |
+| Start a process | direct exec, new process group | direct exec, no console window (Python also creates a process group) |
 | Stop a process tree on timeout | signal the process group | `taskkill /PID <pid> /T /F` |
 | Normalise a path for output | unchanged (`/`) | `\` → `/` |
 | Compare paths | case-sensitive | case-insensitive |
@@ -57,6 +57,10 @@ MSVC projects often contain files that are not plain UTF-8:
 The test repository contains each of these cases, and `shared/fixtures/.gitattributes` (`* -text`) prevents git from
 changing their bytes on a Windows checkout, so the tests see the same bytes everywhere.
 
+The repository root also forces shared goldens, schemas, prompts, source and documentation to LF through
+`.gitattributes`. This matters because the parity tests compare generated Markdown byte for byte; a normal
+`core.autocrlf=true` Git-for-Windows checkout must not turn committed golden files into CRLF.
+
 ## MSVC-aware static analysis
 
 cppcheck can model the Windows API, but it has to be told. When a file includes `windows.h`-family headers, uses SAL
@@ -83,6 +87,10 @@ The skeleton tool's resource table also knows Win32 and COM pairs (`CreateFile*`
 `scripts/install.ps1` prefers scoop, then winget, then choco, shows its plan and asks before installing. After
 installing, restart the editor: an MCP server inherits the editor's `PATH`.
 
+GNU Global queries use its tab-delimited ctags result format and then read the source line themselves. The older
+`global -x` layout cannot represent a path containing spaces unambiguously; the tab-delimited form preserves paths such
+as `src dir/file name.cpp` on Windows and POSIX.
+
 ## Two runtimes, one output
 
 The Python and TypeScript implementations run on all three OSes too. Small differences between the languages had to
@@ -100,6 +108,10 @@ CI runs both test suites on Linux and on Windows. On each runner, the Python sui
 with that machine's engine versions, and the TypeScript suite must match them byte for byte (Chapter 9). The committed
 goldens, generated on Linux, are also compared as an informational check, which shows that the answers are the same
 across operating systems when engine versions match.
+
+The Windows job also runs both stdio MCP protocol tests, the warm streamable-HTTP server/client tests, the PowerShell
+installer, path/case/encoding tests, engine degradation and every documented command. Semantic tests use the
+deterministic `test-hash` embedder; loading the real ONNX model remains an optional CI smoke test.
 
 ---
 

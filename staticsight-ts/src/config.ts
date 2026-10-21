@@ -45,6 +45,8 @@ export interface Config {
   semanticAllowDownload: boolean;
   embedBatch: number;
   embedThreads: number;
+  graphAutoRefresh: boolean;
+  graphAutoRefreshFiles: number;
   dataDirMode: string; // repo | cache | <absolute path>
   rootExplicit: boolean; // WORKSPACE_ROOT / --repo given (vs discovered from the current folder)
 }
@@ -131,6 +133,8 @@ export function loadConfig(): Config {
     semanticAllowDownload: boolEnv("STATICSIGHT_SEMANTIC_ALLOW_DOWNLOAD", true),
     embedBatch: Math.max(1, intEnv("STATICSIGHT_EMBED_BATCH", 16)),
     embedThreads: Math.max(0, intEnv("STATICSIGHT_EMBED_THREADS", 0)),
+    graphAutoRefresh: boolEnv("STATICSIGHT_GRAPH_AUTO_REFRESH", true),
+    graphAutoRefreshFiles: Math.max(0, intEnv("STATICSIGHT_GRAPH_AUTO_REFRESH_FILES", 300)),
     dataDirMode: (process.env.STATICSIGHT_DATA_DIR ?? "").trim() || "repo",
     rootExplicit: Boolean(explicit),
   };

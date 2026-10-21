@@ -29,8 +29,12 @@ GUIDES = [  # reading order, with short titles
     ("semantic-search/internals.md", "Internals"),
     ("semantic-search/experiments.md", "Learn and experiment"),
     ("MCP_TOOLS.md", "MCP tool reference"),
+    ("code-graph.md", "The code graph"),
     ("COMMANDS.md", "Raw commands"),
     ("benchmarks.md", "Benchmarks"),
+    ("developer-guide.md", "Developer guide"),
+    ("future-scope.md", "Future scope"),
+    ("contributor-tracker.md", "Contributor tracker"),
 ]
 BOOK = sorted(p.name for p in (DOCS / "book").glob("[0-9][0-9]-*.md"))
 TOC_MIN_SECTIONS = 4

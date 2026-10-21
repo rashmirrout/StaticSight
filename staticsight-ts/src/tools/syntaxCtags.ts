@@ -4,6 +4,7 @@ import * as md from "../core/md.js";
 import { balancedParens, stripCode } from "../core/cppText.js";
 import { BLOCK_KINDS, ctagsForFile, FUNCTION_KINDS, innermost, type Tag, cmpStr } from "../engines/ctags.js";
 import { changedLines } from "../engines/git.js";
+import { record } from "./findings.js";
 import { readLines, resolveInWorkspace } from "../core/paths.js";
 import { InvalidArgument } from "../core/errors.js";
 
@@ -131,7 +132,7 @@ export function buildSkeleton(lines: string[], start: number, end: number, label
     const mark = changed.has(n) ? " ✏️" : "";
     nodes.push(`${prefix}[L${n}] ${text}${mark}`);
   };
-  const exitText = (kw: string, detail: string, early: boolean): string => {
+  const exitText = (kw: string, detail: string, early: boolean, n: number): string => {
     if (kw === "throw") stats.throws++;
     else stats.returns++;
     if (early) stats.early++;
@@ -141,6 +142,8 @@ export function buildSkeleton(lines: string[], start: number, end: number, label
     if (lk.length) {
       stats.warnings++;
       text += ` ⚠️ ${early ? "early exit; " : ""}${lk.join(", ")} not released on this path`;
+      const names = (lk.join(", ").match(/`(\w+)`/g) ?? []).map((x) => x.slice(1, -1)).join(",");
+      text += ` [${record("leak_path", "medium", rel, n, names, `${kw} at line ${n} leaves ${lk.join(", ")} unreleased`, label ?? "")}]`;
     }
     return text;
   };
@@ -150,7 +153,7 @@ export function buildSkeleton(lines: string[], start: number, end: number, label
     const ikw = im[1];
     const semi = afterCode.indexOf(";");
     const idetail = md.clip(afterOrig.slice(ikw.length, semi >= 0 ? semi : afterOrig.length).trim(), 80);
-    if (ikw === "return" || ikw === "co_return" || ikw === "throw") emit(d + 1, n, exitText(ikw, idetail, true));
+    if (ikw === "return" || ikw === "co_return" || ikw === "throw") emit(d + 1, n, exitText(ikw, idetail, true, n));
     else emit(d + 1, n, `${ikw.toUpperCase()} ${idetail}`.replace(/\s+$/u, ""));
   };
 
@@ -234,7 +237,7 @@ export function buildSkeleton(lines: string[], start: number, end: number, label
     } else if (kw === "return" || kw === "co_return" || kw === "throw") {
       const semi = code.indexOf(";", kwEnd);
       const detail = md.clip(orig.slice(kwEnd, semi >= 0 ? semi : orig.length).trim(), 80);
-      emit(eff, n, exitText(kw, detail, eff >= 2) + tagSuffix);
+      emit(eff, n, exitText(kw, detail, eff >= 2, n) + tagSuffix);
     } else {
       const semi = code.indexOf(";", kwEnd);
       const detail = md.clip(orig.slice(kwEnd, semi >= 0 ? semi : orig.length).trim(), 80);

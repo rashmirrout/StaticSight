@@ -10,3 +10,4 @@ mkdirSync(join(dest, "prompts"), { recursive: true });
 cpSync(join(shared, "tool-spec.json"), join(dest, "tool-spec.json"));
 cpSync(join(shared, "prompts"), join(dest, "prompts"), { recursive: true });
 cpSync(join(shared, "semantic"), join(dest, "semantic"), { recursive: true });
+cpSync(join(shared, "graph"), join(dest, "graph"), { recursive: true });

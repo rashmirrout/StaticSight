@@ -1,0 +1,104 @@
+name: Roadmap implementation item
+description: Claim one Ready or Research item from the StaticSight contributor tracker
+title: "[TRACKER-ID] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pick an item from [the contributor tracker](../../docs/contributor-tracker.md). Keep one tracker item per issue
+        and pull request. Do not start a Blocked item.
+
+  - type: input
+    id: tracker_id
+    attributes:
+      label: Tracker item
+      description: Stable ID from docs/contributor-tracker.md, for example EVAL-001.
+      placeholder: EVAL-001
+    validations:
+      required: true
+
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      description: GitHub handle of the contributor claiming the item.
+      placeholder: "@handle"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: item_status
+    attributes:
+      label: Tracker status
+      description: Only Ready items may be implemented. Research items produce a report and decision first.
+      options:
+        - Ready
+        - Research
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope copied from the tracker
+      description: Copy the Goal, Deliverables and Out of scope sections. Do not silently expand them.
+      placeholder: |
+        Goal:
+        Deliverables:
+        Out of scope:
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List dependencies and show that each is Done. Write "none" when the tracker says —.
+      placeholder: none
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checks
+      description: Copy the item-specific checks and add any concrete test cases needed by the design.
+      placeholder: |
+        - [ ] Item-specific command/result
+        - [ ] Positive fixture case
+        - [ ] Negative false-positive case
+        - [ ] Python/TypeScript parity
+    validations:
+      required: true
+
+  - type: textarea
+    id: ai_task
+    attributes:
+      label: AI implementation task
+      description: Paste the common AI contract followed by the item-specific AI task. Record any clarification made.
+      placeholder: |
+        Implement tracker item <ID> only...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: guardrails
+    attributes:
+      label: Guardrails
+      options:
+        - label: I will implement Python and TypeScript independently; neither will invoke the other.
+          required: true
+        - label: I will not add a C++ build or compile_commands.json requirement.
+          required: true
+        - label: I will add fixture, degradation, golden and parity coverage required by the item.
+          required: true
+        - label: I will keep source access inside WORKSPACE_ROOT and writes inside StaticSight's data directory.
+          required: true
+        - label: I will update the tracker Owner/Status in the implementing pull request.
+          required: true
+
+  - type: textarea
+    id: design_questions
+    attributes:
+      label: Design questions or risks
+      description: Decisions that need agreement before implementation. Leave blank if the tracker already resolves them.

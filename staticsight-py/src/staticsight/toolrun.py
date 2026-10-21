@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 from typing import Any
 
 SEMANTIC_TOOLS = {"semantic_search", "find_similar_code", "refresh_semantic_index"}
+# Tools that read the code graph: a one-shot process builds it in the foreground instead of answering from a
+# half-built graph (the MCP server refreshes large drifts in the background).
+GRAPH_TOOLS = {"get_impact", "get_call_paths", "find_entry_paths", "get_type_hierarchy", "query_graph", "get_lock_graph",
+               "get_context_pack", "get_change_hotspots", "find_switch_coverage", "find_counterparts", "find_related_tests",
+               "find_log_origin", "plan_change", "check_my_edit", "review_changes", "get_upstream_callers", "verify_finding"}
 
 
 class UsageError(Exception):
@@ -179,6 +185,19 @@ async def _prepare(name: str) -> None:
     if not (workspace_data_dir(cfg, create=False)[0] / "GTAGS").exists():
         print("  … building the GNU Global index (first run; large repositories take a few minutes)", file=sys.stderr, flush=True)
     await get_indexer(cfg).start()
+    if name in GRAPH_TOOLS:
+        await ensure_graph_built(cfg)
+
+
+async def ensure_graph_built(cfg) -> None:
+    from .graph.store import get_graph
+
+    g = get_graph(cfg)
+    d = await g.drift()
+    if d.total > cfg.graph_auto_refresh_files:
+        verb = "building" if not g.exists or g.file_count() == 0 else "refreshing"
+        print(f"  … {verb} the code graph ({d.total} files; large repositories take a minute)", file=sys.stderr, flush=True)
+        await g.refresh()
 
 
 async def _finish_background() -> None:
@@ -193,6 +212,23 @@ async def _finish_background() -> None:
         await idx.wait_for_background()
 
 
+async def call_server(url: str, name: str, args: dict[str, Any]) -> str:
+    """Call a tool on a running `staticsight serve` (warm indexes, no start-up cost)."""
+    import logging
+
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    for noisy in ("httpx", "mcp", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    async with streamablehttp_client(url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            res = await session.call_tool(name, args)
+    return "\n".join(c.text for c in res.content if getattr(c, "type", "") == "text")
+
+
 def run_tool_cli(argv: list[str]) -> int:
     import logging
 
@@ -201,6 +237,15 @@ def run_tool_cli(argv: list[str]) -> int:
     logging.getLogger("staticsight").setLevel(logging.WARNING)  # the Markdown on stdout is the output
     spec = load_spec()
     by_name = {t["name"]: t for t in spec["tools"]}
+    server_url = os.environ.get("STATICSIGHT_SERVER", "").strip()
+    if argv[:1] == ["--server"] or (argv and argv[0].startswith("--server=")):
+        if argv[0] == "--server":
+            if len(argv) < 2:
+                print("error: --server needs a URL, e.g. http://127.0.0.1:8765/mcp", file=sys.stderr)
+                return 2
+            server_url, argv = argv[1], argv[2:]
+        else:
+            server_url, argv = argv[0].split("=", 1)[1], argv[1:]
     if not argv or argv[0] in ("--list", "-l", "list", "-h", "--help", "help"):
         print(list_text(spec))
         return 0
@@ -217,6 +262,15 @@ def run_tool_cli(argv: list[str]) -> int:
     except UsageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if server_url:
+        try:
+            text = asyncio.run(call_server(server_url, name, args))
+        except Exception as exc:  # noqa: BLE001 - connection problems become a clear CLI error
+            print(f"error: cannot reach the StaticSight server at {server_url}: {type(exc).__name__}: {exc}\n"
+                  "Start it with `staticsight serve` (it keeps the indexes warm), or drop --server.", file=sys.stderr)
+            return 3
+        print(text)
+        return 1 if text.startswith("### ❌") else 0
     fn = {f.__name__: f for f in TOOLS}[name]
     from .cli import one_shot_semantic
 

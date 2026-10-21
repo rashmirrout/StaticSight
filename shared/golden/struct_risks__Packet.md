@@ -1,6 +1,6 @@
 ### ⚠️ LOW-LEVEL MEMORY USAGES: `Packet`
 Defined at: `src/net/packet.hpp:4-10`.
-Modifying the size, padding or member order of `Packet` may break 4 sites (out of 16 references):
+Modifying the size, padding or member order of `Packet` may break 4 sites (out of 17 references):
 
 1. `src/net/socket.cpp:6` in `send_packet` — 🌐 raw I/O, 📏 size/offset assumption, 🎭 type punning
    `return send(fd, reinterpret_cast<const char*>(&pkt), sizeof(Packet), 0);`

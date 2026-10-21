@@ -185,3 +185,45 @@ def test_benchmark_script_runs_read_only(workspace, tmp_path):
     data = json.loads(out_json.read_text())
     assert data["review"]["files"] >= 1 and data["locks"]["cycles"] == 1
     assert data["locks"]["held_across_blocking"] == 1
+
+
+def test_eval_script_static_mode(tmp_path):
+    """scripts/eval_agent.py builds the test repository, runs the task calls and finds every planted bug."""
+    out_json = tmp_path / "eval.json"
+    env = {k: v for k, v in os.environ.items() if k not in ("WORKSPACE_ROOT", "STATICSIGHT_DATA_DIR")}
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "eval_agent.py"), "--only", "switch_gap,log_origin,lock_order_cycle",
+                        "--agent-cmd", "echo 'msg_name in src/net/proto.cpp:31 misses Ping'", "--json", str(out_json)],
+                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert r.returncode == 0, r.stderr
+    assert "**Evidence found:** 3 of 3 tasks" in r.stdout
+    data = json.loads(out_json.read_text())
+    assert data["agent"] == {"switch_gap": 1.0, "log_origin": 0.0, "lock_order_cycle": 0.0}
+
+
+def test_warm_server_answers_like_the_one_shot_cli(workspace):
+    """`serve` keeps the indexes warm; `tool --server URL` prints exactly what the one-shot CLI prints."""
+    import socket
+    import time
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    url = f"http://127.0.0.1:{port}/mcp"
+    srv = subprocess.Popen([sys.executable, str(SCRIPT), "--repo", str(workspace), "serve", "--port", str(port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            with socket.socket() as s:
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.3)
+        case = {"id": "callers__process_packet"}
+        r = run("tool", "--server", url, "get_upstream_callers", "process_packet")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == (GOLDEN_DIR / f"{case['id']}.md").read_text(encoding="utf-8")
+        bad = run("tool", "--server", f"http://127.0.0.1:{port + 1 if port < 65535 else port - 1}/mcp", "get_index_status")
+        assert bad.returncode == 3 and "staticsight serve" in bad.stderr
+    finally:
+        srv.terminate()
+        srv.wait(timeout=30)

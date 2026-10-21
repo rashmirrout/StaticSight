@@ -1,5 +1,5 @@
 ### 🧬 SIMILAR CODE: `src/storage/wal.cpp:5`
-Source: function `wal_append` (L4-6). Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
+Source: function `wal_append` (L4-6). Index: 31 files, 72 chunks (test-hash@builtin). Index is up to date.
 1. `src/storage/wal.cpp:8-10` — function `wal_replay` (cpp) · 0.86 · very similar
    ```cpp
     8 | void wal_replay(const uint8_t* wal_ptr, Packet& out) {

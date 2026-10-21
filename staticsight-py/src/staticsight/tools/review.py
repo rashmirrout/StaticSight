@@ -55,9 +55,8 @@ async def review_report(cfg: Config, base_ref: str = "", max_symbols: int = 8) -
 
     # 2. static audit of changed source files
     audits = []
-    for rep in ds.reports[:6]:
-        if rep.diff.status == "deleted" or is_header(rep.diff.path):
-            continue
+    sources = [r for r in ds.reports if r.diff.status != "deleted" and not is_header(r.diff.path)]
+    for rep in sources[:6]:
         audits.append(md.enforce_budget(await _safe(static_audit_report(cfg, rep.diff.path, True, base_ref)), 1200))
     if audits:
         text = "\n\n".join(audits)
@@ -167,12 +166,136 @@ async def review_report(cfg: Config, base_ref: str = "", max_symbols: int = 8) -
         checklist.append("Near-duplicate code exists elsewhere (section 10): check whether the same change is needed there.")
         parts.append("## 10. Similar code elsewhere (semantic index)\n" + "\n".join(similar))
 
+    parts += await _graph_sections(cfg, ds, funcs, base_ref, checklist)
+
     checklist += [
         "Re-read each changed function's skeleton for missing error handling on new branches.",
         "For signature/return-value changes, confirm every caller in section 4 still satisfies the new contract.",
     ]
-    parts.append("## ✅ Reviewer checklist\n" + "\n".join(f"- [ ] {c}" for c in dict.fromkeys(checklist)))
-    return md.enforce_budget("\n\n".join(parts), cfg.review_max_chars)
+    tail = "## ✅ Reviewer checklist\n" + "\n".join(f"- [ ] {c}" for c in dict.fromkeys(checklist))
+    # the checklist is the summary of everything above: it must survive the budget, the sections are truncated instead
+    budget = max(cfg.review_max_chars - len(tail) - 160, cfg.review_max_chars // 2)
+    body = md.enforce_budget("\n\n".join(_fit(parts, budget)), budget)
+    return body + "\n\n" + tail
+
+
+def _fit(parts: list[str], budget: int) -> list[str]:
+    """Share the budget between sections: the longest are shortened first, so every section keeps its heading and
+    its first findings instead of the last sections disappearing."""
+    if sum(len(p) for p in parts) + 2 * (len(parts) - 1) <= budget or len(parts) < 2:
+        return parts
+    head, rest = parts[0], parts[1:]
+    remaining = budget - len(head) - 2 * len(rest)
+    lens = sorted(len(p) for p in rest)
+    cap = 0
+    for i, n in enumerate(lens):
+        share = remaining // (len(lens) - i)
+        if n <= share:
+            remaining -= n
+            continue
+        cap = share
+        break
+    else:
+        return parts
+    cap = max(cap - 130, 200)  # room for the truncation note
+    return [head] + [p if len(p) <= cap else md.enforce_budget(p, cap) for p in rest]
+
+
+async def _graph_sections(cfg: Config, ds, funcs, base_ref: str, checklist: list[str]) -> list[str]:
+    """Sections 11-13 from the code graph and git history: reach, completeness, earlier fixes."""
+    from ..graph import query as gq
+    from .findings import record
+    from .graph_tools import graph_for
+    from .research import _PLATFORM, _history, _is_fix, switch_coverage_report
+
+    parts: list[str] = []
+    try:
+        g, _note, usable = await graph_for(cfg)
+    except StaticSightError:
+        usable = False
+    modified = [(r, s) for r, s in funcs if not s.is_new]
+    if usable:
+        db = g.db
+        threads = gq.thread_targets(db)
+        reach = []
+        for r, sc in modified[:6]:
+            targets = [f for f in gq.functions_named(db, sc.tag.qualified) if f.path == r.diff.path] or \
+                gq.functions_named(db, sc.tag.qualified)
+            if not targets:
+                continue
+            cache: dict = {}
+            seen = {t.key for t in targets}
+            frontier, reached = targets, []
+            for _ in range(3):
+                nxt: dict[tuple, gq.Fn] = {}
+                for tgt in frontier:
+                    for c in gq.callers_of(db, tgt, cache):
+                        if c.caller_key not in seen:
+                            seen.add(c.caller_key)
+                            fn = gq.caller_fn(db, c)
+                            reached.append(fn)
+                            nxt[fn.key] = fn
+                frontier = [nxt[k] for k in sorted(nxt)]
+            entries = sorted({f"`{gq.label(f)}` ({gq.entry_kind(db, f, threads)})" for f in reached
+                              if gq.entry_kind(db, f, threads) in ("program", "thread")})
+            tests = sorted({gq.label(f) for f in reached if gq.entry_kind(db, f, threads) == "test"})
+            line = (f"- `{sc.tag.qualified}`: " + (f"{md.plural(len(reached), 'function')} in "
+                    f"{md.plural(len({f.path for f in reached}), 'file')} within 3 calls" if reached else "no callers in the repository"))
+            if entries:
+                line += "; reached from " + ", ".join(entries[:3])
+            line += "; tests: " + (", ".join(f"`{t}`" for t in tests[:3]) if tests else "⚠️ none")
+            reach.append(line)
+        if reach:
+            if any("⚠️ none" in x for x in reach):
+                checklist.append("Some changed functions are not reached by any test (section 11): add or run a test that covers them.")
+            parts.append("## 11. Reach of changed functions (code graph)\n" + "\n".join(reach)
+                         + "\n_Use `get_impact` / `find_entry_paths` for the full chains._")
+        gaps: list[str] = []
+        enums: set[str] = {sc.tag.name for _, sc in ds.changed_types() if sc.tag.kind == "enum"}
+        for r, sc in ds.changed_functions():
+            try:
+                text = read_lines(cfg.workspace_root / r.diff.path)
+            except StaticSightError:
+                continue
+            for ln in sc.lines:
+                for m in re.finditer(r"\b(\w+)::\w+", text[ln - 1] if 0 < ln <= len(text) else ""):
+                    if db.execute("SELECT 1 FROM defs WHERE name=? AND kind='enum' LIMIT 1", (m.group(1),)).fetchone():
+                        enums.add(m.group(1))
+        for e in sorted(enums)[:3]:
+            rep = await _safe(switch_coverage_report(cfg, e))
+            gaps += [ln for ln in rep.splitlines() if ln.startswith("- ❌") or ln.startswith("- ⚠️")]
+        changed = {(r.diff.path, sc.tag.qualified) for r, sc in ds.changed_functions()}
+        for r, sc in modified:
+            for f in gq.functions_named(db, sc.tag.qualified):
+                if (f.path, f.qualified) in changed or f.path == r.diff.path:
+                    continue
+                if _PLATFORM.search(f.path) or _PLATFORM.search(r.diff.path):
+                    fid = record("counterpart_unchanged", "medium", f.path, f.line, f.qualified,
+                                 f"`{sc.tag.qualified}` ({r.diff.path}:{sc.tag.line}) changed but its counterpart "
+                                 f"`{f.qualified}` ({f.loc}) did not", function=f.qualified)
+                    gaps.append(f"- ⚠️ `{f.qualified}` (`{f.loc}`) is the platform twin of changed "
+                                f"`{sc.tag.qualified}` but was not changed `{fid}`")
+        if gaps:
+            checklist.append("Complete the change (section 12): handle the missing enum values and update the unchanged twins, or say why not.")
+            parts.append("## 12. Completeness\n" + "\n".join(gaps[:10]))
+    fixes = []
+    try:
+        from ..engines.git import _git
+
+        mine = (await _git(cfg, "rev-list", f"{ds.info.base_sha}..HEAD")).split() if modified else []
+    except StaticSightError:
+        mine = []
+    for r, sc in modified[:5]:
+        rows = sorted(sc.lines) or [sc.tag.line]
+        hist = await _history(cfg, r.diff.path, rows[0], rows[-1], 10) if r.diff.status == "modified" else []
+        for h, date, subject in hist:
+            if _is_fix(subject) and not any(full.startswith(h) for full in mine):
+                fixes.append(f"- `{sc.tag.qualified}` L{rows[0]}-{rows[-1]}: `{h}` {date} 🐞 {md.clip(subject, 80)}")
+    if fixes:
+        checklist.append("Changed lines were touched by earlier fixes (section 13): make sure the change does not undo them.")
+        parts.append("## 13. Earlier fixes on the changed lines (git history)\n" + "\n".join(list(dict.fromkeys(fixes))[:8])
+                     + "\n_Use `get_line_history` for the full story._")
+    return parts
 
 
 def _locking_functions(cfg: Config, live) -> set[tuple[str, str]]:

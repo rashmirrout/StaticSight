@@ -1,5 +1,5 @@
 ### 🔎 SEMANTIC SEARCH: "retry transient network failures with exponential backoff"
-Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
+Index: 31 files, 72 chunks (test-hash@builtin). Index is up to date.
 1. `docs/design.md:5-8` — section `Retry policy` (markdown) · 0.61 · semantic+keyword
    ```markdown
    5 | ## Retry policy

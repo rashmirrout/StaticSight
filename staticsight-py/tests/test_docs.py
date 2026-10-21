@@ -38,3 +38,9 @@ def test_navigation_is_up_to_date():
 
     r = subprocess.run([sys.executable, str(SHARED.parent / "docs" / "make_nav.py"), "--check"], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_cross_platform_golden_files_are_forced_to_lf():
+    """Git for Windows must not turn byte-compared golden files into CRLF."""
+    attrs = (SHARED.parent / ".gitattributes").read_text(encoding="utf-8")
+    assert "shared/golden/** text eol=lf" in attrs

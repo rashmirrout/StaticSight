@@ -9,6 +9,7 @@ import { LOCK_TRIGGERS, LockWalker, lineEvents, RECURSIVE_KINDS } from "../core/
 import { matchesGlob, readLines } from "../core/paths.js";
 import { cmpStr, FUNCTION_KINDS, tryCtagsForFiles } from "../engines/ctags.js";
 import { rgSearch } from "../engines/rg.js";
+import { record } from "./findings.js";
 
 const BLOCKING = new RegExp(
   "\\b(send|sendto|sendmsg|recv|recvfrom|recvmsg|connect|accept|select|poll|epoll_wait|fopen|fread|fwrite|fflush|" +
@@ -182,7 +183,7 @@ function ev(e: Edge): string {
   return `\`${e.path}:${e.lineFirst}\` in \`${e.fn}\`: holds \`${e.first}\` (L${e.lineFirst}), takes \`${e.second}\` ${how}`;
 }
 
-function involves(k: string, symbol: string): boolean {
+export function _involves(k: string, symbol: string): boolean {
   if (!symbol || k === symbol) return true;
   const last = k.split("::").pop()!;
   return last.split(".").pop() === symbol;
@@ -218,7 +219,7 @@ export async function lockOrderReport(cfg: Config, pathGlob = "", symbol = "", f
     selfre = selfre.filter((x) => focus.has(`${x[0]}\0${x[1]}`));
   }
   if (!lockingFns.length) return `${title}\n✅ No lock acquisitions found` + (pathGlob ? ` in files matching \`${pathGlob}\`.` : ".");
-  const keep = (ks: string[]): boolean => ks.some((k) => involves(k, symbol)) && (onlyKeys === null || ks.some((k) => onlyKeys!.has(k)));
+  const keep = (ks: string[]): boolean => ks.some((k) => _involves(k, symbol)) && (onlyKeys === null || ks.some((k) => onlyKeys!.has(k)));
   const cycles = findCycles(edges).filter(keep);
   if (focus !== null && !cycles.length && !selfre.length && !blocking.length) return "";
   const pairs = new Map<string, Edge[]>();
@@ -237,7 +238,9 @@ export async function lockOrderReport(cfg: Config, pathGlob = "", symbol = "", f
     out.push(`\n⚠️ **${md.plural(cycles.length, "potential deadlock cycle")}** (locks taken in opposite orders):`);
     const items = cycles.map((c, i) => {
       const ring = [...c, c[0]].map((k) => `\`${k}\``).join(" → ");
-      const lines = [`${i + 1}. ${ring}`];
+      const first = [...pairs.get(`${c[0]}\0${c[1]}`)!].sort((p, q) => cmpTuple([p.path, p.lineFirst, p.lineSecond, p.via], [q.path, q.lineFirst, q.lineSecond, q.via]))[0];
+      const fid = record("lock_cycle", "medium", first.path, first.lineSecond, c.join("->"), "locks taken in a cycle: " + c.join(" -> "), first.fn);
+      const lines = [`${i + 1}. ${ring} \`${fid}\``];
       c.forEach((x, j) => {
         const y = c[(j + 1) % c.length];
         const evs = [...pairs.get(`${x}\0${y}`)!].sort((p, q) => cmpTuple([p.path, p.lineFirst, p.lineSecond, p.via], [q.path, q.lineFirst, q.lineSecond, q.via]));
@@ -252,7 +255,7 @@ export async function lockOrderReport(cfg: Config, pathGlob = "", symbol = "", f
     out.push("\n⚠️ **Same lock taken twice** (self-deadlock for non-recursive mutexes):");
     out.push(
       ...md.truncateList(
-        sre.map(([p, fn, n, k, via]) => `- \`${p}:${n}\` in \`${fn}\`: \`${k}\` is already held` + (via ? `, and \`${via}()\` takes it again` : "")),
+        sre.map(([p, fn, n, k, via]) => `- \`${p}:${n}\` in \`${fn}\`: \`${k}\` is already held` + (via ? `, and \`${via}()\` takes it again` : "") + ` \`${record("lock_twice", "medium", p, n, k, `${k} taken while already held`, fn)}\``),
         cfg.maxResults,
         "sites",
       ),
@@ -265,7 +268,7 @@ export async function lockOrderReport(cfg: Config, pathGlob = "", symbol = "", f
     out.push("\n⏳ **Locks held across blocking calls** (latency, and deadlock if the other side needs the lock):");
     out.push(
       ...md.truncateList(
-        blk.map(([p, fn, n, call, ks]) => `- \`${p}:${n}\` in \`${fn}\`: \`${call}()\` while holding ` + ks.map((k) => `\`${k}\``).join(", ")),
+        blk.map(([p, fn, n, call, ks]) => `- \`${p}:${n}\` in \`${fn}\`: \`${call}()\` while holding ` + ks.map((k) => `\`${k}\``).join(", ") + ` \`${record("lock_blocking", "weak", p, n, call, `${call}() called while holding ` + ks.join(", "), fn)}\``),
         cfg.maxResults,
         "sites",
       ),

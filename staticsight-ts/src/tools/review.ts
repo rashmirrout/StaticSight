@@ -15,6 +15,11 @@ import { lineEvents } from "../core/locks.js";
 import { staticAuditReport } from "./staticCpp.js";
 import { branchSkeletonReport } from "./syntaxCtags.js";
 import { similarForReview } from "../semantic/search.js";
+import * as gq from "../graph/query.js";
+import { graphFor } from "./graphTools.js";
+import { record } from "./findings.js";
+import { _PLATFORM, _history, _is_fix, switchCoverageReport } from "./research.js";
+import { runEngine } from "../engines/base.js";
 
 const CALLEE = /\b([A-Za-z_]\w*)\s*\(/g;
 const NOT_CALLEES = new Set([
@@ -51,8 +56,8 @@ export async function reviewReport(cfg: Config, baseRef = "", maxSymbols = 8): P
   parts.push(section("1. What changed", renderDiffScopes(ds, cfg, true), 3500));
 
   const audits: string[] = [];
-  for (const rep of ds.reports.slice(0, 6)) {
-    if (rep.diff.status === "deleted" || isHeader(rep.diff.path)) continue;
+  const sources = ds.reports.filter((r) => r.diff.status !== "deleted" && !isHeader(r.diff.path));
+  for (const rep of sources.slice(0, 6)) {
     audits.push(md.enforceBudget(await safe(staticAuditReport(cfg, rep.diff.path, true, baseRef)), 1200));
   }
   if (audits.length) {
@@ -159,12 +164,92 @@ export async function reviewReport(cfg: Config, baseRef = "", maxSymbols = 8): P
     parts.push("## 10. Similar code elsewhere (semantic index)\n" + similar.join("\n"));
   }
 
+  parts.push(...await graphSections(cfg, ds, funcs, checklist));
+
   checklist.push(
     "Re-read each changed function's skeleton for missing error handling on new branches.",
     "For signature/return-value changes, confirm every caller in section 4 still satisfies the new contract.",
   );
-  parts.push("## ✅ Reviewer checklist\n" + [...new Set(checklist)].map((c) => `- [ ] ${c}`).join("\n"));
-  return md.enforceBudget(parts.join("\n\n"), cfg.reviewMaxChars);
+  const tail = "## ✅ Reviewer checklist\n" + [...new Set(checklist)].map((c) => `- [ ] ${c}`).join("\n");
+  const budget = Math.max(cfg.reviewMaxChars - tail.length - 160, Math.floor(cfg.reviewMaxChars / 2));
+  const body = md.enforceBudget(fit(parts, budget).join("\n\n"), budget);
+  return body + "\n\n" + tail;
+}
+
+function fit(parts: string[], budget: number): string[] {
+  if (parts.reduce((a, p) => a + p.length, 0) + 2 * (parts.length - 1) <= budget || parts.length < 2) return parts;
+  const [head, ...rest] = parts;
+  let remaining = budget - head.length - 2 * rest.length;
+  const lens = rest.map((p) => p.length).sort((a, b) => a - b);
+  let cap = 0;
+  for (let i = 0; i < lens.length; i++) {
+    const share = Math.floor(remaining / (lens.length - i));
+    if (lens[i] <= share) { remaining -= lens[i]; continue; }
+    cap = share; break;
+  }
+  if (!cap) return parts;
+  cap = Math.max(cap - 122, 200);
+  return [head, ...rest.map((p) => p.length <= cap ? p : md.enforceBudget(p, cap))];
+}
+
+async function graphSections(cfg: Config, ds: DiffScopes, funcs: Array<[FileReport, ScopeChange]>, checklist: string[]): Promise<string[]> {
+  const parts: string[] = [];
+  let usable = false, db: any = null;
+  try { const [g, , u] = await graphFor(cfg); usable = u; db = g.db; } catch { usable = false; }
+  const modified = funcs.filter(([, s]) => !s.isNew);
+  if (usable) {
+    const threads = gq.threadTargets(db), reach: string[] = [];
+    for (const [r, sc] of modified.slice(0, 6)) {
+      const targets = gq.functionsNamed(db, sc.tag.qualified).filter((f) => f.path === r.diff.path);
+      const ts = targets.length ? targets : gq.functionsNamed(db, sc.tag.qualified);
+      if (!ts.length) continue;
+      const cache = new Map<string, any>(), seen = new Set(ts.map((t) => t.key)); let frontier = ts, reached: gq.Fn[] = [];
+      for (let i = 0; i < 3; i++) {
+        const nxt = new Map<string, gq.Fn>();
+        for (const tgt of frontier) for (const c of gq.callersOf(db, tgt, cache)) if (!seen.has(c.callerKey)) { seen.add(c.callerKey); const fn = gq.callerFn(db, c); reached.push(fn); nxt.set(fn.key, fn); }
+        frontier = [...nxt.keys()].sort().map((k) => nxt.get(k)!);
+      }
+      const entries = [...new Set(reached.filter((f) => ["program", "thread"].includes(gq.entryKind(db, f, threads))).map((f) => "`" + gq.label(f) + "` (" + gq.entryKind(db, f, threads) + ")"))].sort();
+      const tests = [...new Set(reached.filter((f) => gq.entryKind(db, f, threads) === "test").map((f) => gq.label(f)))].sort();
+      let line = "- `" + sc.tag.qualified + "`: " + (reached.length ? md.plural(reached.length, "function") + " in " + md.plural(new Set(reached.map((f) => f.path)).size, "file") + " within 3 calls" : "no callers in the repository");
+      if (entries.length) line += "; reached from " + entries.slice(0, 3).join(", ");
+      line += "; tests: " + (tests.length ? tests.slice(0, 3).map((t) => "`" + t + "`").join(", ") : "⚠️ none");
+      reach.push(line);
+    }
+    if (reach.length) {
+      if (reach.some((x) => x.includes("⚠️ none"))) checklist.push("Some changed functions are not reached by any test (section 11): add or run a test that covers them.");
+      parts.push("## 11. Reach of changed functions (code graph)\n" + reach.join("\n") + "\n_Use `get_impact` / `find_entry_paths` for the full chains._");
+    }
+    const gaps: string[] = [], enums = new Set<string>();
+    for (const [, sc] of ds.changedTypes()) if (sc.tag.kind === "enum") enums.add(sc.tag.name);
+    for (const [r, sc] of ds.changedFunctions()) {
+      let text: string[] = []; try { text = readLines(join(cfg.workspaceRoot, r.diff.path)); } catch { continue; }
+      for (const ln of sc.lines) for (const m of ((text[ln - 1] ?? "").matchAll(/\b(\w+)::\w+/g))) if (db.prepare("SELECT 1 FROM defs WHERE name=? AND kind='enum' LIMIT 1").get(m[1])) enums.add(m[1]);
+    }
+    for (const e of [...enums].sort().slice(0, 3)) {
+      const rep = await safe(switchCoverageReport(cfg, e));
+      gaps.push(...rep.split("\n").filter((ln) => ln.startsWith("- ❌") || ln.startsWith("- ⚠️")));
+    }
+    const changed = new Set(ds.changedFunctions().map(([r, sc]) => r.diff.path + "\0" + sc.tag.qualified));
+    for (const [r, sc] of modified) for (const f of gq.functionsNamed(db, sc.tag.qualified)) {
+      if (changed.has(f.path + "\0" + f.qualified) || f.path === r.diff.path) continue;
+      if (_PLATFORM.test(f.path) || _PLATFORM.test(r.diff.path)) {
+        const fid = record("counterpart_unchanged", "medium", f.path, f.line, f.qualified, "`" + sc.tag.qualified + "` (" + r.diff.path + ":" + sc.tag.line + ") changed but its counterpart `" + f.qualified + "` (" + f.loc + ") did not", f.qualified);
+        gaps.push("- ⚠️ `" + f.qualified + "` (`" + f.loc + "`) is the platform twin of changed `" + sc.tag.qualified + "` but was not changed `" + fid + "`");
+      }
+    }
+    if (gaps.length) { checklist.push("Complete the change (section 12): handle the missing enum values and update the unchanged twins, or say why not."); parts.push("## 12. Completeness\n" + gaps.slice(0, 10).join("\n")); }
+  }
+  let mine: string[] = [];
+  try { if (modified.length) { const res = await runEngine("git", ["rev-list", ds.info.baseSha + "..HEAD"], { cwd: cfg.workspaceRoot, timeout: cfg.timeoutS }); if (res.returncode === 0) mine = res.stdout.split(/\s+/).filter(Boolean); } } catch { mine = []; }
+  const fixes: string[] = [];
+  for (const [r, sc] of modified.slice(0, 5)) {
+    const rows = [...sc.lines].sort((a, b) => a - b), a = rows[0] ?? sc.tag.line, b = rows[rows.length - 1] ?? sc.tag.line;
+    const hist = r.diff.status === "modified" ? await _history(cfg, r.diff.path, a, b, 10) : [];
+    for (const [h, date, subject] of hist) if (_is_fix(subject) && !mine.some((full) => full.startsWith(h))) fixes.push("- `" + sc.tag.qualified + "` L" + a + "-" + b + ": `" + h + "` " + date + " 🐞 " + md.clip(subject, 80));
+  }
+  if (fixes.length) { checklist.push("Changed lines were touched by earlier fixes (section 13): make sure the change does not undo them."); parts.push("## 13. Earlier fixes on the changed lines (git history)\n" + [...new Set(fixes)].slice(0, 8).join("\n") + "\n_Use `get_line_history` for the full story._"); }
+  return parts;
 }
 
 /** Changed functions whose body takes a lock, as "path\0qualified". */

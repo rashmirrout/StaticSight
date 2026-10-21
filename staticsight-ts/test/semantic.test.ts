@@ -1,17 +1,19 @@
 // Semantic search: chunking, classification, test embedder, incremental index, drift policy, CLI.
 import { spawnSync } from "node:child_process";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { Tag } from "../src/engines/ctags.js";
-import { fnv1a32, HashEmbedder, hashTokens } from "../src/engines/embedder.js";
+import { fnv1a32, HashEmbedder, hashTokens, modelCatalog } from "../src/engines/embedder.js";
 import { chunkFile, MAX_CHARS } from "../src/semantic/chunker.js";
 import { contentSkipReason, languageOf, preSkipReason } from "../src/semantic/files.js";
 import { getSemanticIndex } from "../src/semantic/index.js";
 import { similarForReview } from "../src/semantic/search.js";
 import { loadConfig } from "../src/config.js";
 import { safeTool, TOOLS } from "../src/server.js";
+import { commandModel } from "../src/cli.js";
 import { setupWorkspace } from "./helpers.js";
 
 const T = (name: string, args: Record<string, unknown> = {}) => safeTool(name, TOOLS[name])(args);
@@ -52,6 +54,41 @@ describe("semantic units", () => {
     let dot = 0;
     for (let i = 0; i < 256; i++) dot += a[i] * b[i];
     expect(dot).toBeGreaterThan(0.8);
+  });
+  it("offers pinned optional model choices", () => {
+    delete process.env.STATICSIGHT_MODEL_MANIFEST;
+    const catalog = modelCatalog();
+    expect(catalog.defaultName).toBe("jina-code");
+    expect(Object.keys(catalog.models)).toEqual(expect.arrayContaining(["jina-code", "minilm-fast", "bge-small-en", "test-hash"]));
+    for (const name of ["jina-code", "minilm-fast", "bge-small-en"]) {
+      const spec = catalog.models[name];
+      expect(spec.revision).toMatch(/^[0-9a-f]{40}$/);
+      expect(spec.files?.[spec.onnx!]).toMatch(/^[0-9a-f]{64}$/);
+      expect(spec.files?.["tokenizer.json"]).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+  it("uses the default only for a bare download command", () => {
+    expect(commandModel("download", "", "jina-code")).toBe("jina-code");
+    expect(commandModel("download", "minilm-fast", "jina-code")).toBe("minilm-fast");
+    expect(commandModel("status", "", "jina-code")).toBe("");
+    expect(commandModel("list", "", "jina-code")).toBe("");
+  });
+  it("loads an external model manifest without replacing built-ins", () => {
+    const p = join(mkdtempSync(join(tmpdir(), "ss-models-")), "models.json");
+    const custom = {
+      description: "external model", repo: "example/model", revision: "1".repeat(40), license: "Apache-2.0",
+      dims: 384, max_tokens: 256, pooling: "mean", onnx: "onnx/model.onnx",
+      files: { "onnx/model.onnx": "2".repeat(64), "tokenizer.json": "3".repeat(64) },
+    };
+    writeFileSync(p, JSON.stringify({ models: { "my-model": custom } }));
+    process.env.STATICSIGHT_MODEL_MANIFEST = p;
+    try {
+      expect(modelCatalog().models["my-model"].repo).toBe("example/model");
+      writeFileSync(p, JSON.stringify({ models: { "jina-code": custom } }));
+      expect(() => modelCatalog()).toThrow(/cannot replace built-in/);
+    } finally {
+      delete process.env.STATICSIGHT_MODEL_MANIFEST;
+    }
   });
 });
 

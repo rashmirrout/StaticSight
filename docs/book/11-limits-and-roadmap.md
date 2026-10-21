@@ -9,9 +9,11 @@ using the tool well; the roadmap shows where the evidence could go further.
 
 ## Known limits
 
-**No type resolution.** Without a compiler, StaticSight does not know types. Overloads, and methods with the same
-name on different classes, are grouped by name. Calls through function pointers, virtual dispatch, `std::function` or
-macros that build names are not found as callers.
+**No type resolution.** Without a compiler, StaticSight does not know types. Overloads are grouped by name. The code
+graph narrows calls by class where the source says so (`C::f()`, or a call inside a member of `C`), but `obj.f()` may
+reach any method `f`, because the type of `obj` is unknown. Virtual dispatch is covered through the class hierarchy
+(`get_type_hierarchy`, overrides in `get_impact`); calls through function-pointer tables, `std::function` members or
+macros that build names are not found as callers. Functions passed to thread and callback APIs are followed.
 
 **Macros.** Code generated or hidden by macros is partly invisible to ctags and to the text analyses. Heavy macro use
 can hide braces (affecting skeletons) or calls (affecting callers). cppcheck may need definitions through
@@ -34,8 +36,12 @@ positives.
 large repository takes time (about an hour for 3,000 files on a 16-thread CPU without AVX-512 VNNI), although it runs
 in the background and code is indexed first.
 
-**No history.** StaticSight looks at the current diff and the current code. It does not yet know whether a line was
-recently fixed, reverted or often changed.
+**History by commit message.** `get_line_history`, `get_change_hotspots` and section 13 of `review_changes` recognise
+bug fixes and reverts from commit subjects (fix, bug, revert, crash, leak, race, …). A fix committed as "update
+parser" is not recognised.
+
+**Completeness by name and folder.** Counterparts are found by naming pairs (encode/decode, …), platform folder and
+file names (`_win`, `_posix`, …) and git co-change. Twins with unrelated names are left to `find_similar_code`.
 
 Each limit is visible in the output where it matters (labels such as `heuristic`, `ripgrep fallback`, `locks held by
 callers are not visible`), so the agent can say "unverified" instead of guessing.
@@ -44,36 +50,30 @@ callers are not visible`), so the agent can say "unverified" instead of guessing
 
 The next steps come from one observation: after "what changed and who is affected", the most expensive review misses
 are about **intent** (why the change was made), **completeness** (what should have changed but didn't), **history**
-(was this fixed before), **house rules**, and **trust** (how sure is each finding). The candidate scenarios, labelled A
-to L:
+(was this fixed before), **house rules**, and **trust** (how sure is each finding). The scenarios, labelled A to L,
+and where they stand:
 
-| | Scenario | What it would add |
+| | Scenario | Status |
 |---|---|---|
-| A | Regression archaeology | Blame removed or modified lines; surface earlier bug-fix and revert commits and churn on the same code. |
-| B | Completeness | Enum values vs `switch` and string tables; symmetric pairs (serialize/deserialize, open/close, register/unregister); `#ifdef` and platform twins; copy-paste clones (the first step, `find_similar_code`, exists); error-code mappings; mocks and function tables; tests that touch changed code. |
-| C | Intent-aware review | Compare the pull request description, work item and commit messages with the actual diff: scope creep, missing acceptance criteria. |
-| D | Looks-safe changes | Default arguments, `virtual`/`override` drift, overload resolution changes, header macros/inline/`constexpr`, implicit conversions. |
-| E | Interprocedural resources and locks | *Started:* lock order (one call level), locks held across blocking calls and Win32 locks are available in `track_lock_order`. Next: deeper call chains, resource pairing across functions, lambda captures. |
-| F | Security flow | Untrusted lengths reaching `memcpy` or indexing, size overflow, TOCTOU, unchecked `HRESULT`, focused on the diff. |
-| G | Compatibility and rollout | Wire, disk and ABI formats; registry and config keys; telemetry schemas; feature flags; mixed-version upgrades. |
-| H | House rules | A repository rules file plus learned idioms; flag deviations. |
-| I | Risk triage for large diffs | Rank changes by fan-in, bug history, complexity and sensitive APIs. |
-| J | Trust | A self-verification pass, confidence scores, de-duplication, grouping by root cause. |
-| K | Pull-request workflow | Inline pull-request comments in a polite, inquisitive tone; incremental re-review; tracking of resolved threads; an author pre-push mode. |
-| L | Measuring quality | A benchmark from reverted historical bug fixes plus seeded fixtures; recall, precision and cost gates in CI. |
+| A | Regression archaeology | ✅ `get_line_history`, section 13 of `review_changes`, fixes in `plan_change` and `get_context_pack`. |
+| B | Completeness | ✅ `find_switch_coverage`, `find_counterparts` (pairs, platform twins, co-change), `find_related_tests`, section 12 of `review_changes`, `check_my_edit`. Next: string tables, error-code maps, mocks. |
+| C | Intent-aware review | Next: compare the pull request description, work item and commit messages with the diff. |
+| D | Looks-safe changes | ✅ partly: overrides through `get_type_hierarchy`; stale callers of changed signatures in `check_my_edit`. Next: default arguments, overload changes, implicit conversions. |
+| E | Interprocedural resources and locks | ✅ lock order through one call level, locks across blocking calls, `get_lock_graph`; project allocators in cppcheck. Next: deeper call chains, lambda captures. |
+| F | Security flow | Next: untrusted lengths reaching `memcpy` or indexing, using `find_entry_paths` for exposure. |
+| G | Compatibility and rollout | Next: wire, disk and ABI formats; config keys; telemetry schemas. |
+| H | House rules | Next: a repository rules file plus learned idioms. |
+| I | Risk triage for large diffs | ✅ `get_change_hotspots` (churn, fixes, fan-in); section 11 reach. Next: complexity. |
+| J | Trust | ✅ finding IDs with confidence, `verify_finding`, structured content. Next: grouping by root cause. |
+| K | Pull-request workflow | Next: inline pull-request comments, incremental re-review. |
+| L | Measuring quality | ✅ `scripts/benchmark.py` and `scripts/eval_agent.py` (planted-bug tasks, optional agent runs). Next: tasks mined from reverted historical fixes, gates in CI. |
 
-The proposed order starts with **L** (measure before improving), then **A** (history), **B** (completeness) and
-**J** (trust), then **C** and **K**, then D to I.
+Deeper parsing (a tree-sitter C++ backend for exact structure, types of local variables for `obj.f()`) would sharpen
+every graph answer while keeping the zero-compile principle.
 
-The proposed tools come in three phases. Each phase keeps the zero-compile principle:
-
-1. **With the current engines** (git, ctags, ripgrep): a benchmark runner, line history, change hot spots, switch
-   coverage, counterpart finding, related tests, and History and Completeness sections in `review_changes`.
-2. **Verification and workflow:** a finding verifier with confidence, change-risk ranking (with a complexity tool
-   such as lizard), mapping findings to pull-request threads, incremental review since a given commit.
-3. **Deeper parsing:** a tree-sitter C++ backend for more precise structure, interprocedural resource pairs, a lock graph,
-   override integrity, signature impact, untrusted-input tracing, house-rule checks (for example with semgrep), and
-   contract surfaces (IDL, protobuf, registry, telemetry).
+The detailed direction now lives in [Future scope](../future-scope.md). Contributors should take implementation-sized
+work from the [Contributor tracker](../contributor-tracker.md), which gives each item a stable ID, dependencies,
+out-of-scope boundary, acceptance checks and an AI-ready task prompt.
 
 ## Contributing
 
@@ -83,7 +83,9 @@ StaticSight is open source. A change is complete when:
 3. degraded paths (missing engine, bad input) return a helpful card;
 4. `docs/` is updated and `docs/check_docs.py` passes.
 
-Start with [Getting started](../getting-started.md), read [Architecture](04-architecture.md), and run both test suites.
+Start with the repository's [contribution entry point](../../CONTRIBUTING.md) and
+[Developer guide](../developer-guide.md), read [Architecture](04-architecture.md), then claim one Ready item from the
+[Contributor tracker](../contributor-tracker.md).
 
 ---
 

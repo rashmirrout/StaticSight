@@ -54,7 +54,7 @@ def _pep668_help(semantic: bool) -> None:
         f"     then use {vpy} instead of python3 (also in your MCP client configuration).\n"
         f"  2. install for your user only, overriding the protection:\n"
         f"       {_py()} -m pip install --user --break-system-packages -r {req}\n"
-        f"  3. use your OS packages if they are recent enough (mcp >= 1.12 is rarely packaged)."
+        f"  3. use your OS packages if they are recent enough (mcp >= 1.19 is rarely packaged)."
     )
 
 

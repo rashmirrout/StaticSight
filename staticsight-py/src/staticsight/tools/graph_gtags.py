@@ -14,6 +14,7 @@ from ..core.errors import InvalidArgument, StaticSightError
 from ..engines.gnu_global import Hit
 from ..engines.rg import rg_search
 from ..indexer import get_indexer
+from .findings import record
 
 _IDENT = re.compile(r"^[A-Za-z_~][A-Za-z0-9_]*$")
 _GLOBAL_LINE = gnu_global.GLOBAL_LINE
@@ -171,7 +172,9 @@ async def callers_report(cfg: Config, symbol: str, path_glob: str = "") -> str:
         rows.append((h.path, h.line, caller, usage, lines[h.line - 1].strip()))
     title = f"### 📞 UPSTREAM CALLERS: `{sym}`"
     if not rows:
-        return f"{title}\n✅ No call sites found (source: {source}). The symbol may be unused, called via macro, or only referenced dynamically."
+        vnote = await _virtual_note(cfg, sym)
+        return (f"{title}\n✅ No call sites found (source: {source}). The symbol may be unused, called via macro, or only "
+                "referenced dynamically." + (f"\n{vnote}" if vnote else ""))
     files = sorted({r[0] for r in rows})
     ignored = sum(1 for r in rows if r[3].startswith("⚠️"))
     head = [title, f"Found {md.plural(len(rows), 'call site')} in {md.plural(len(files), 'file')} (source: {source})."]
@@ -189,6 +192,10 @@ async def callers_report(cfg: Config, symbol: str, path_glob: str = "") -> str:
             entry.append(f"**`{path}`**")
             cur = path
         suffix = f" — {usage}" if usage else ""
+        if usage.startswith("⚠️"):
+            fid = record("ignored_result", "medium", path, line, sym, f"`{caller}` ignores the result of `{sym}`",
+                         function=caller)
+            suffix += f" `{fid}`"
         entry.append(f"{i}. L{line} in `{caller}`{suffix}")
         entry.append(f"   {md.code_span(text)}")
         items.append("\n".join(entry))
@@ -199,7 +206,30 @@ async def callers_report(cfg: Config, symbol: str, path_glob: str = "") -> str:
             counts[r[0]] = counts.get(r[0], 0) + 1
         top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
         shown.append("_Top files: " + ", ".join(f"`{p}` ({n})" for p, n in top) + "._")
-    return "\n".join(head + [""] + shown)
+    vnote = await _virtual_note(cfg, sym)
+    return "\n".join(head + [""] + shown + ([vnote] if vnote else []))
+
+
+async def _virtual_note(cfg: Config, sym: str) -> str:
+    """Name-based call sites miss calls through a base pointer; say so when the method is virtual."""
+    from ..graph import query as gq
+    from ..graph.store import get_graph
+
+    try:
+        g = get_graph(cfg)
+        _, usable = await g.ensure_fresh()
+        if not usable:
+            return ""
+        db = g.db
+        fns = [f for f in gq.functions_named(db, sym, definitions_first=False) if f.cls]
+        virt = [f for f in fns if re.search(r"\b(virtual|override|pure)\b", f.properties)]
+        if not virt:
+            return ""
+        family = sorted({o.qualified for f in virt for o in gq.overrides_of(db, f)} | {f.qualified for f in virt})
+    except StaticSightError:
+        return ""
+    return (f"\nℹ️ `{sym}` is virtual ({', '.join(f'`{q}`' for q in family[:6])}): calls through a base pointer reach "
+            f"every override. `get_impact(\"{sym}\")` resolves them through the class hierarchy.")
 
 
 async def get_upstream_callers(symbol: str, path_glob: str = "") -> str:

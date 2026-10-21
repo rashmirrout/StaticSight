@@ -1,7 +1,7 @@
 {
   "server": {
     "name": "StaticSight",
-    "instructions": "StaticSight gives you zero-compile, high-fidelity evidence about an uncompiled C++ repository (Universal Ctags, GNU Global, ripgrep, cppcheck, git). For a code review, start with review_changes (one-call bundle) or get_diff_scopes, then drill down with the other tools. Every result is concise Markdown with file:line references you can cite. Results marked 'heuristic' come from text analysis, not a compiler: verify before asserting."
+    "instructions": "StaticSight gives you zero-compile, high-fidelity evidence about an uncompiled C++ repository (Universal Ctags, GNU Global, ripgrep, cppcheck, git, a code graph and local semantic search). For a code review, start with review_changes (one-call bundle) or get_diff_scopes, then drill down with the other tools. Before editing, plan_change maps every place to touch; after each edit, check_my_edit checks it. get_impact, get_call_paths and find_entry_paths follow calls several levels deep; get_context_pack gives everything about one function in one call. Findings carry IDs (F1a2b3c): run verify_finding before reporting one. Truncated lists end with a get_more token. Every result is concise Markdown with file:line references you can cite. Results marked 'heuristic' come from text analysis, not a compiler: verify before asserting."
   },
   "tools": [
     {
@@ -19,6 +19,39 @@
           "type": "integer",
           "default": 8,
           "description": "Maximum number of changed functions/types to analyse in depth."
+        }
+      ]
+    },
+    {
+      "name": "check_my_edit",
+      "description": "Fast self-check of your own uncommitted C++ edits, meant to run after every edit: for each function changed since the previous check (baseline=\"last\", the default) or since HEAD (baseline=\"HEAD\"), it looks for exit paths that leak what the function allocates, cppcheck errors on the changed lines, callers outside the change that still use an old signature, switches missing a value of an enum the change uses, and platform twins that were not changed. Findings get IDs for `verify_finding`. Use while coding; use `review_changes` for the full review before committing.",
+      "params": [
+        {
+          "name": "baseline",
+          "type": "string",
+          "default": "last",
+          "description": "'last' (changes since the previous check_my_edit call) or 'HEAD' (all uncommitted changes)."
+        }
+      ],
+      "annotations": {
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "plan_change",
+      "description": "Plans a change to one function before you edit it: an ordered checklist of every place to touch (definition, declarations, overrides, call sites grouped by file, platform or naming counterparts, header includers), the tests that reach it, its contract, and risks (earlier fixes on these lines, locks it takes, callers that ignore its result). Describe the change in `change` (e.g. \"add a timeout parameter\"): signature words turn call-site checks into required updates. Use before a refactor or any edit whose ripple you have not mapped yet.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function name, optionally qualified (`Class::method`, `ns::fn`), e.g. 'process_packet'."
+        },
+        {
+          "name": "change",
+          "type": "string",
+          "default": "",
+          "description": "Optional short description of the intended change, e.g. 'add a timeout parameter'."
         }
       ]
     },
@@ -89,6 +122,24 @@
       ]
     },
     {
+      "name": "get_context_pack",
+      "description": "Everything an agent needs about one function in a single call, within a character budget: location and signature, the documented contract and obligations, the branch skeleton, callers (with result used/ignored), in-repository and external callees, types in the signature, locks it takes, tests that reach it, and its recent git history (fixes marked). `target` is a function name or file:line; a type name returns its hierarchy and header blast radius. Use before reading or editing unfamiliar code instead of opening several files.",
+      "params": [
+        {
+          "name": "target",
+          "type": "string",
+          "required": true,
+          "description": "Function name (`Router::process_packet`) or `file:line` inside it."
+        },
+        {
+          "name": "max_chars",
+          "type": "integer",
+          "default": 6000,
+          "description": "Character budget for the whole pack (2000-12000)."
+        }
+      ]
+    },
+    {
       "name": "get_upstream_callers",
       "description": "Finds every call site of a function/method across the repository (GNU Global reference index; falls back to ripgrep when the index is unavailable). Each hit shows file:line, the enclosing caller function, the call line, and whether the return value is used or ignored. Use after changing a function's signature, return values, error codes, preconditions or side effects to check that callers still hold up.",
       "params": [
@@ -103,6 +154,78 @@
           "type": "string",
           "default": "",
           "description": "Optional fnmatch glob to restrict caller files, e.g. 'src/*'."
+        }
+      ]
+    },
+    {
+      "name": "get_impact",
+      "description": "Shows everything a change to a function can affect, several levels deep, in one call: its callers, their callers, and so on (or, with direction='callees', everything it calls). Each call site shows file:line, whether the result is used or ignored, and which callers are program entry points, threads/callbacks or tests; virtual methods include their overrides. Use instead of repeated get_upstream_callers when a function's signature, return values, error handling or side effects change and you need the full blast radius.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function name, optionally qualified (`Class::method`, `ns::fn`), e.g. 'process_packet'."
+        },
+        {
+          "name": "depth",
+          "type": "integer",
+          "default": 3,
+          "description": "How many call levels to follow (1-6)."
+        },
+        {
+          "name": "direction",
+          "type": "string",
+          "default": "callers",
+          "description": "'callers' (who is affected) or 'callees' (what it depends on)."
+        },
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict results to some files, e.g. 'src/net/*'."
+        }
+      ]
+    },
+    {
+      "name": "get_call_paths",
+      "description": "Finds how one function reaches another: the shortest call chains from `from_symbol` to `to_symbol` (up to 3), with the file:line and source line of every hop, including threads and callbacks started on the way. Use to answer 'how does the RPC handler end up in this code?', 'is this path possible?', or to explain a stack trace.",
+      "params": [
+        {
+          "name": "from_symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function the path starts from, e.g. 'main' or an RPC handler."
+        },
+        {
+          "name": "to_symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function the path must reach."
+        },
+        {
+          "name": "max_depth",
+          "type": "integer",
+          "default": 8,
+          "description": "Longest call chain to consider."
+        }
+      ]
+    },
+    {
+      "name": "find_entry_paths",
+      "description": "Answers 'can outside input reach this code, and how?': walks callers back from a function to program entry points (main, WinMain, DllMain, ServiceMain), thread start routines and registered callbacks, and shows the call chain from each entry with file:line; also lists the tests that reach it. Use when judging the exposure of a risky change (a memcpy, a parser, a new error path) or when code looks unreachable.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function name, optionally qualified (`Class::method`, `ns::fn`), e.g. 'process_packet'."
+        },
+        {
+          "name": "max_depth",
+          "type": "integer",
+          "default": 10,
+          "description": "Longest call chain to consider."
         }
       ]
     },
@@ -127,6 +250,30 @@
           "type": "string",
           "required": true,
           "description": "Function or type name, e.g. 'zero_copy_allocate'."
+        }
+      ]
+    },
+    {
+      "name": "get_type_hierarchy",
+      "description": "Shows a class's place in the inheritance tree: its base classes, every class derived from it (recursively), and each virtual method with the class that introduces it and every override (file:line), from Universal Ctags without compiling. Use before changing a virtual method, a base class or an interface, and to find every implementation behind a call through a base pointer.",
+      "params": [
+        {
+          "name": "type_name",
+          "type": "string",
+          "required": true,
+          "description": "Class or struct name, optionally qualified, e.g. 'Transport'."
+        }
+      ]
+    },
+    {
+      "name": "query_graph",
+      "description": "Answers free-form structural questions over the code graph with a small query language: `callers*2 of process_packet`, `callees of Router::process_packet`, `derived of Transport`, `bases*3 of TlsTransport`, `overrides of send_frame`, `members of Router`, `includers*2 of packet.hpp in src/*`, `definitions of Packet`, `entry-points`. Use when the dedicated tools do not fit the question; depth up to 6.",
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Query such as `callers*2 of process_packet in src/*`; relations: callers, callees, derived, bases, overrides, members, includers, definitions; or `entry-points`."
         }
       ]
     },
@@ -203,6 +350,24 @@
       ]
     },
     {
+      "name": "get_lock_graph",
+      "description": "Maps the locks of a subsystem: every lock, the functions that take it, and which lock is taken while another is held, drawn as a small Mermaid diagram plus a table. Use to understand a module's locking design before adding or reordering locks; use track_lock_order to find problems (cycles, locks held across blocking calls).",
+      "params": [
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict the scanned files, e.g. 'src/net/*'."
+        },
+        {
+          "name": "symbol",
+          "type": "string",
+          "default": "",
+          "description": "Optional lock (mutex/critical section) name to focus on, e.g. 'route_mutex'."
+        }
+      ]
+    },
+    {
       "name": "run_file_static_audit",
       "description": "Runs cppcheck (no compilation, best-effort includes) on one C/C++ file and returns findings sorted by severity: memory/resource leaks, null dereferences, out-of-bounds, uninitialised variables, use-after-free, bad casts, performance and portability issues. Findings on lines changed in the current diff are marked. Use on every modified .cpp/.c file during review.",
       "params": [
@@ -223,6 +388,126 @@
           "type": "string",
           "default": "",
           "description": "Git ref used to determine changed lines (empty = default merge-base)."
+        }
+      ]
+    },
+    {
+      "name": "find_switch_coverage",
+      "description": "Checks every `switch` over an enum against the enum's values: lists each switch (file:line, function) and the values it does not handle, and whether a `default:` catches them. Use when an enum gains, loses or renames a value, the classic 'added a value, forgot a case' bug.",
+      "params": [
+        {
+          "name": "enum_name",
+          "type": "string",
+          "required": true,
+          "description": "Enum name, optionally qualified, e.g. 'MsgType'."
+        }
+      ]
+    },
+    {
+      "name": "find_counterparts",
+      "description": "Finds code that should change together with a function: its naming pair (encode/decode, serialize/deserialize, open/close, register/unregister, acquire/release, ...), platform or #ifdef twins (the same function in *_win / *_posix files), and files that historically change together with its file (git). When the function is changed in the current diff, flags the counterparts that were not. Use to catch half-done changes.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function name, optionally qualified (`Class::method`, `ns::fn`), e.g. 'process_packet'."
+        }
+      ]
+    },
+    {
+      "name": "find_related_tests",
+      "description": "Lists the tests that exercise a function: test functions (in test folders or test files, including gtest/Catch/Boost TEST macros) that reach it through calls within `depth` levels, plus test files that mention it. Reports when no test covers it. Use to know which tests to run or update after a change, and whether a new test is needed.",
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Function name, optionally qualified (`Class::method`, `ns::fn`), e.g. 'process_packet'."
+        },
+        {
+          "name": "depth",
+          "type": "integer",
+          "default": 3,
+          "description": "How many call levels to follow (1-6)."
+        }
+      ]
+    },
+    {
+      "name": "get_line_history",
+      "description": "Explains why lines look the way they do and whether they were fixed before: git blame per line (ignoring whitespace and moved/copied code) and every commit that changed the range, with bug-fix and revert commits marked 🐞. Use on lines a diff changes or removes, to catch changes that undo an earlier fix, and to find who-changed-what context for a review. No author names are shown.",
+      "params": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Path relative to the repository root, e.g. 'src/router.cpp'."
+        },
+        {
+          "name": "start_line",
+          "type": "integer",
+          "required": true,
+          "description": "First line of the range (1-based)."
+        },
+        {
+          "name": "end_line",
+          "type": "integer",
+          "default": 0,
+          "description": "Last line of the range; 0 means start_line only."
+        }
+      ]
+    },
+    {
+      "name": "get_change_hotspots",
+      "description": "Ranks the C/C++ files that deserve the closest review: how often they changed (git history up to HEAD), how many of those changes were bug fixes or reverts, how many lines changed, and how many calls come in from other files (code graph). Use to decide where to look hardest in a large diff, or to find fragile areas of an unfamiliar codebase.",
+      "params": [
+        {
+          "name": "path_glob",
+          "type": "string",
+          "default": "",
+          "description": "Optional fnmatch glob to restrict results to some files, e.g. 'src/net/*'."
+        },
+        {
+          "name": "since_days",
+          "type": "integer",
+          "default": 365,
+          "description": "How far back to look in git history, in days, counted back from the HEAD commit."
+        }
+      ]
+    },
+    {
+      "name": "find_log_origin",
+      "description": "Finds the code that produced a log or error message: paste the line from a log, crash report or incident, and it strips the variable parts (numbers, hex, GUIDs, quoted values, paths), searches the remaining literal text inside C/C++ string literals, and returns the best-matching format strings with their function and callers. Use to start an investigation from a symptom.",
+      "params": [
+        {
+          "name": "text",
+          "type": "string",
+          "required": true,
+          "description": "A log line or error message as it appears in the log; variable parts are removed automatically."
+        }
+      ]
+    },
+    {
+      "name": "verify_finding",
+      "description": "Re-checks one finding reported earlier by a StaticSight tool (IDs like `F1a2b3c` appear next to leaks, cppcheck errors, ignored results, lock-order cycles, unlocked accesses, switch gaps and unchanged counterparts). Re-runs the tool that produced it on the current code and says whether the finding is reproduced, moved or gone, shows the code around it, and lists what would prove it wrong. Use before putting a finding in a review, and after a fix to confirm it is gone.",
+      "params": [
+        {
+          "name": "finding_id",
+          "type": "string",
+          "required": true,
+          "description": "Finding ID shown next to a finding, e.g. 'F1a2b3c'."
+        }
+      ]
+    },
+    {
+      "name": "get_more",
+      "description": "Returns the next page of a list that another StaticSight tool truncated. Truncated lists end with a note like `…and 42 more call sites. Next: get_more(\"P1a2b3c\")`; pass that token to see the following items (and a new token if there are still more). Use when the first page was not enough to finish the analysis, instead of re-running the tool with a narrower filter.",
+      "params": [
+        {
+          "name": "token",
+          "type": "string",
+          "required": true,
+          "description": "Continuation token from a truncated list, e.g. 'P1a2b3c'."
         }
       ]
     },
@@ -312,7 +597,7 @@
     },
     {
       "name": "get_index_status",
-      "description": "Reports the state of the GNU Global symbol index and of the semantic search index (building with progress, ready, stale, not built), their locations and age, the embedding model, and which CLI engines are installed. Use when caller/definition results say they came from the ripgrep fallback, or to follow a background semantic index build.",
+      "description": "Reports the state of the GNU Global symbol index, the semantic search index and the code graph (building with progress, ready, stale, not built), their locations and age, the embedding model, and which CLI engines are installed. Use when caller/definition results say they came from the ripgrep fallback, or to follow a background semantic index build.",
       "params": []
     }
   ],
@@ -320,7 +605,67 @@
     {
       "name": "review_cpp_changes",
       "description": "Step-by-step workflow for a thorough, evidence-based review of C++ changes using StaticSight tools.",
-      "file": "prompts/review_cpp_changes.md"
+      "file": "prompts/review_cpp_changes.md",
+      "args": [
+        {
+          "name": "focus",
+          "description": "Optional area to pay special attention to, e.g. 'locking' or 'the wire format'.",
+          "template": "Pay special attention to: {value}."
+        }
+      ]
+    },
+    {
+      "name": "investigate_hang",
+      "description": "Workflow to find the cause of a hang, deadlock or stall: lock graph, lock-order cycles, locks held across blocking calls, and the threads involved.",
+      "file": "prompts/investigate_hang.md",
+      "args": [
+        {
+          "name": "symptom",
+          "description": "Optional description of the hang or a log line from it.",
+          "template": "The symptom: {value}"
+        }
+      ]
+    },
+    {
+      "name": "investigate_incident",
+      "description": "Workflow to go from a log line or error message to the root cause: origin of the message, how input reaches it, recent changes, and where else the bug exists.",
+      "file": "prompts/investigate_incident.md",
+      "args": [
+        {
+          "name": "log_text",
+          "description": "The log or error line from the incident.",
+          "template": "The log line: `{value}`"
+        }
+      ]
+    },
+    {
+      "name": "plan_refactor",
+      "description": "Workflow to plan a refactor before editing: every place to change, contracts to keep, tests to run, and a step-by-step plan that keeps the code working.",
+      "file": "prompts/plan_refactor.md",
+      "args": [
+        {
+          "name": "symbol",
+          "description": "The function or type to change.",
+          "template": "The target: `{value}`."
+        },
+        {
+          "name": "change",
+          "description": "What should change, e.g. 'add a timeout parameter'.",
+          "template": "The intended change: {value}."
+        }
+      ]
+    },
+    {
+      "name": "onboard_me",
+      "description": "Workflow to understand an unfamiliar area of the code base: main types, entry points and flow, threads and locks, fragile spots and tests.",
+      "file": "prompts/onboard_me.md",
+      "args": [
+        {
+          "name": "area",
+          "description": "The area to learn, e.g. 'the packet router' or 'src/net'.",
+          "template": "The area to explain: {value}."
+        }
+      ]
     }
   ]
 }

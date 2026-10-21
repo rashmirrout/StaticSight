@@ -194,7 +194,34 @@ The inversion is invisible in the diff: `report()` never names `pool_mutex`. It 
 `drain()` is followed to the lock that `drain()` takes, and compared with the order used by `rebalance()` in an
 unchanged part of the file.
 
-## Step 9: new calls and the checklist
+## Step 9: reach, completeness and history (code graph + git)
+
+The next sections look beyond the diff. **Reach** follows callers three levels up through the
+[code graph](../code-graph.md) and names the entry points, threads and tests that reach each changed function.
+**Completeness** asks what should have changed too. **Earlier fixes** (not in this example) lists bug-fix commits that
+touched the changed lines before.
+
+```text
+## 11. Reach of changed functions (code graph)
+- `encode_msg`: 2 functions in 2 files within 3 calls; tests: `TEST(Proto,RoundTrip)`
+- `start_timer`: no callers in the repository; tests: ⚠️ none
+- `Router::process_packet`: 6 functions in 4 files within 3 calls; reached from `main` (program), `pump_loop` (thread); tests: `test_drop_invalid`
+- `Router::get_route_count`: no callers in the repository; tests: ⚠️ none
+
+## 12. Completeness
+- ⚠️ `src/net/proto.cpp:31` in `msg_name`: missing `Ping`; handled by `default:` — check that is right `F7b1502`
+- ⚠️ `start_timer` (`src/platform/timer_win.cpp:3`) is the platform twin of changed `start_timer` but was not changed `Ff8880b`
+```
+
+`process_packet` runs on the `pump_loop` worker thread started from `main`: the leak and the ignored result are
+reachable in production, not only in a test. The `Ping` value and the Windows timer are the kind of miss a diff can
+never show, because the missing lines are exactly the ones that were not written. `F7b1502` and `Ff8880b` are finding
+IDs, which the agent can re-check with `verify_finding`.
+
+(Excerpts in this chapter are shortened; the current output also puts an ID such as `F7a0cc5` next to each leak,
+cppcheck error, ignored result and lock-order cycle.)
+
+## Step 10: new calls and the checklist
 
 The bundle ends with the functions newly called by the diff (so the agent can check their contracts with
 `get_symbol_contract`) and a checklist generated from what was found:
@@ -211,13 +238,16 @@ The bundle ends with the functions newly called by the diff (so the agent can ch
 - [ ] A lock is held across a blocking call: shrink the critical section or document why it is safe.
 ```
 
-The whole bundle is about 11,400 characters: within the 16,000-character budget, and far smaller than the source files
-the agent would otherwise have to read.
+The whole bundle fills the 16,000-character budget. When the sections do not all fit, the longest are shortened first,
+so every section keeps its heading and first findings and the checklist is always complete. That is still far smaller
+than the source files the agent would otherwise have to read.
 
-## Step 10: the agent drills down and reports
+## Step 11: the agent drills down, verifies and reports
 
 With the bundle in context, the agent can ask follow-up questions, for example `get_symbol_contract` on a newly called
-function, or `track_struct_risks` with a narrower `path_glob`. Then it writes the review. A typical report, built from
+function, `get_impact` for the full chains, or `track_struct_risks` with a narrower `path_glob`. Before reporting a
+finding it runs `verify_finding` on its ID, which re-runs the check on the current code and lists what would disprove
+it. Then it writes the review. A typical report, built from
 the evidence above:
 
 > **Blockers**
@@ -232,7 +262,12 @@ the evidence above:
 >    order (or `std::scoped_lock` both), and send after unlocking.
 >
 > **Major**
-> 5. `src/net/listener.cpp:17` ignores the new `-2` result of `process_packet`.
+> 5. `src/net/listener.cpp:17` ignores the new `-2` result of `process_packet`, and so does the `pump_loop` worker
+>    thread (`server_loop.cpp:9`), which `main` starts.
+> 6. `src/net/proto.cpp:43`: `encode_batch` returns early without releasing `ring` from `mem::zero_copy_allocate`
+>    (cppcheck `memleak`, through the contract "MUST be paired with release_buffer()").
+> 7. `src/net/proto.cpp:31`: `msg_name` has no case for the new `MsgType::Ping`; it falls into `default:`.
+> 8. `src/platform/timer_win.cpp:3`: the clamp added to the POSIX `start_timer` is missing on Windows.
 >
 > **Verdict:** not ready to merge.
 

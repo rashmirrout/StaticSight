@@ -1,5 +1,5 @@
 ### 🔎 SEMANTIC SEARCH: "check that a memory allocation succeeded before using the buffer"
-Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
+Index: 31 files, 72 chunks (test-hash@builtin). Index is up to date.
 1. `src/memory/pool.hpp:5-18` — namespace `mem` (cpp) · 0.20 · semantic+keyword
    ```cpp
     5 | namespace mem {
@@ -10,17 +10,17 @@ Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
    10 |  * @warning Every allocation MUST be paired with release_buffer()
       | … 8 more lines
    ```
-2. `src/net/socket.cpp:14-17` — function `packet_count` (cpp) · 0.15 · semantic+keyword
+2. `src/memory/pool.cpp:1-2` — file (cpp) · 0.13 · semantic+keyword
+   ```cpp
+   1 | #include "memory/pool.hpp"
+   2 | #include <cstdlib>
+   ```
+3. `src/net/socket.cpp:14-17` — function `packet_count` (cpp) · 0.15 · semantic+keyword
    ```cpp
    14 | // A Packet mentioned in a comment only; no memory operation here.
    15 | int packet_count(const Packet* list, int n) {
    16 |     return n;
    17 | }
-   ```
-3. `src/memory/pool.cpp:1-2` — file (cpp) · 0.13 · semantic+keyword
-   ```cpp
-   1 | #include "memory/pool.hpp"
-   2 | #include <cstdlib>
    ```
 4. `src/memory/pool.cpp:10-12` — function `mem::release_buffer` (cpp) · 0.07 · semantic+keyword
    ```cpp

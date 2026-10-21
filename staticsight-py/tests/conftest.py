@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 SHARED = REPO / "shared"
 sys.path.insert(0, str(SHARED / "fixtures"))
 import make_fixture  # noqa: E402
+from staticsight.graph.store import get_graph, reset_graphs  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -35,4 +36,6 @@ async def workspace(fixture_repo, tmp_path_factory):
     await get_indexer().start()
     assert get_indexer().state == "ready", get_indexer().status()
     await get_semantic_index().refresh()
+    reset_graphs()
+    await get_graph().refresh()  # tools then report "up to date", whatever order the tests run in
     return fixture_repo

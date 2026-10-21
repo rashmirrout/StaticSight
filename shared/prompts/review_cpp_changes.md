@@ -6,9 +6,14 @@ collect evidence before you judge anything. Cite every finding as `file:line` an
    and headers changed. {focus}
 2. For every modified function:
    - `get_branch_skeleton` to audit each path: early returns, error paths, loops, `break`/`continue`, `throw`.
-   - `get_enclosing_scope` when you need the full body around a changed line.
-   - `get_upstream_callers` if the signature, return values, error codes, preconditions or side effects changed.
+   - `get_enclosing_scope` when you need the full body around a changed line, or `get_context_pack` for
+     everything about it in one call.
+   - `get_impact` if the signature, return values, error codes, preconditions or side effects changed (callers
+     several levels deep, entry points, tests); `get_upstream_callers` for the direct call sites only.
    - `get_symbol_contract` for functions the change starts calling or calls differently.
+   - `find_counterparts` (encode/decode, open/close, `_win`/`_posix` twins) and `find_switch_coverage` for enums
+     that gained a value: the change may be incomplete.
+   - `get_line_history` on changed lines that an earlier fix touched: the change must not undo it.
 3. For every modified struct/class/union/enum: `track_struct_risks`.
 4. For every modified header: `get_include_blast_radius`.
 5. For every modified member/global that can be shared between threads: `track_state_mutations`.
@@ -30,5 +35,7 @@ collect evidence before you judge anything. Cite every finding as `file:line` an
 - Exception safety: partially updated state when a throw happens mid-function.
 
 ## Reporting
-Group findings by severity (Blocker, Major, Minor, Nit). For each: what is wrong, the evidence (tool + file:line), the impact,
-and a concrete fix. Say explicitly when a finding is heuristic and needs human confirmation. End with a clear verdict.
+Before reporting a finding that has an ID (like `F1a2b3c`), run `verify_finding` on it and rule out what it lists.
+Group findings by severity (Blocker, Major, Minor, Nit). For each: what is wrong, the evidence (tool + file:line + ID),
+the impact, and a concrete fix. Say explicitly when a finding is heuristic and needs human confirmation. End with a
+clear verdict.

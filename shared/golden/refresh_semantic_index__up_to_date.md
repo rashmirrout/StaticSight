@@ -1,2 +1,2 @@
 ### 🧠 SEMANTIC INDEX REFRESH
-✅ Index already up to date. Index: 21 files, 48 chunks (test-hash@builtin).
+✅ Index already up to date. Index: 31 files, 72 chunks (test-hash@builtin).

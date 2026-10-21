@@ -41,7 +41,7 @@ The Python packages are listed, with their allowed versions, in two files at the
 
 | File | Contents | Installs (with dependencies) |
 |---|---|---|
-| `requirements.txt` | `mcp[cli]>=1.12,<2` | about 35 packages, ~70 MB (`pydantic`, `anyio`, `httpx`, `starlette`, `uvicorn`, `jsonschema`, …; `[cli]` adds `typer`, `python-dotenv`) |
+| `requirements.txt` | `mcp[cli]>=1.19,<2` | about 35 packages, ~70 MB (`pydantic`, `anyio`, `httpx`, `starlette`, `uvicorn`, `jsonschema`, …; `[cli]` adds `typer`, `python-dotenv`) |
 | `requirements-semantic.txt` | `requirements.txt` + `onnxruntime>=1.17`, `tokenizers>=0.15`, `numpy>=1.24` | ~245 MB in total (`onnxruntime` also pulls `protobuf`, `flatbuffers`, `packaging`; `tokenizers` pulls `huggingface-hub`) |
 
 > 💡 **Prefer Node?** The TypeScript twin needs **Node ≥ 22.13** instead of Python (`cd staticsight-ts && npm install && npm run build`).
@@ -234,7 +234,7 @@ python3 -m pip install -r $SS_HOME/requirements-semantic.txt     # + onnxruntime
 or one by one, if you want to see each:
 
 ```bash
-python3 -m pip install "mcp[cli]>=1.12,<2"
+python3 -m pip install "mcp[cli]>=1.19,<2"
 python3 -m pip install "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.24"
 ```
 
@@ -258,7 +258,12 @@ Verify: `python3 -c "import mcp; print('mcp ok')"` (and `python3 -c "import onnx
 
 ```bash
 python3 $SS_HOME/staticsight.py model download
+python3 $SS_HOME/staticsight.py model list
 ```
+
+Bare `model download` needs no model environment variable and always downloads the default `jina-code`. If you choose
+another entry from `model list`, download it with `--model NAME`, then set `STATICSIGHT_EMBED_MODEL=NAME` in the MCP
+server environment and rebuild the index.
 
 It goes to `~/.cache/staticsight/models/` (or `$XDG_CACHE_HOME/staticsight/models/`), once for all repositories.
 Without this step, the first semantic search downloads it.
@@ -326,7 +331,11 @@ Verify: `py -3 -c "import mcp; print('mcp ok')"`.
 
 ```powershell
 py -3 "$env:SS_HOME\staticsight.py" model download
+py -3 "$env:SS_HOME\staticsight.py" model list
 ```
+
+The same rule applies on Windows: alternatives are downloaded with `--model NAME` but are used only when
+`$env:STATICSIGHT_EMBED_MODEL = "NAME"` (and the MCP configuration's `env`) is set.
 
 It goes to `%LOCALAPPDATA%\staticsight\models\`, once for all repositories.
 

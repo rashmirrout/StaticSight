@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from staticsight.engines.ctags import Tag
-from staticsight.engines.embedder import HashEmbedder, fnv1a32, hash_tokens
+from staticsight.engines.embedder import HashEmbedder, fnv1a32, hash_tokens, model_catalog
+from staticsight.cli import _command_model
 from staticsight.semantic.chunker import MAX_CHARS, chunk_file
 from staticsight.semantic.files import content_skip_reason, language_of, pre_skip_reason
 from staticsight.semantic.index import get_semantic_index, reset_semantic_indexes
@@ -71,6 +72,46 @@ def test_hash_embedder_is_deterministic():
     e = HashEmbedder(256)
     v = e.embed(["retry the connection", "retry connection"])
     assert abs(float((v[0] * v[0]).sum()) - 1.0) < 1e-6 and float(v[0] @ v[1]) > 0.8
+
+
+def test_builtin_model_catalog_is_pinned_and_offers_choices(monkeypatch):
+    monkeypatch.delenv("STATICSIGHT_MODEL_MANIFEST", raising=False)
+    default, models, manifest = model_catalog()
+    assert default == "jina-code" and manifest == ""
+    assert {"jina-code", "minilm-fast", "bge-small-en", "test-hash"} <= set(models)
+    for name in ("jina-code", "minilm-fast", "bge-small-en"):
+        spec = models[name]
+        assert len(spec["revision"]) == 40 and all(c in "0123456789abcdef" for c in spec["revision"])
+        assert spec["onnx"] in spec["files"] and "tokenizer.json" in spec["files"]
+        assert all(len(h) == 64 and all(c in "0123456789abcdef" for c in h) for h in spec["files"].values())
+
+
+def test_bare_download_selects_default_but_other_actions_use_environment():
+    assert _command_model("download", "", "jina-code") == "jina-code"
+    assert _command_model("download", "minilm-fast", "jina-code") == "minilm-fast"
+    assert _command_model("status", "", "jina-code") == ""
+    assert _command_model("list", "", "jina-code") == ""
+
+
+def test_external_model_manifest_adds_but_cannot_replace(tmp_path, monkeypatch):
+    manifest = tmp_path / "models.json"
+    custom = {
+        "description": "test external model",
+        "repo": "example/model",
+        "revision": "1" * 40,
+        "license": "Apache-2.0",
+        "dims": 384,
+        "max_tokens": 256,
+        "pooling": "mean",
+        "onnx": "onnx/model.onnx",
+        "files": {"onnx/model.onnx": "2" * 64, "tokenizer.json": "3" * 64},
+    }
+    manifest.write_text(__import__("json").dumps({"models": {"my-model": custom}}))
+    monkeypatch.setenv("STATICSIGHT_MODEL_MANIFEST", str(manifest))
+    assert "my-model" in model_catalog()[1]
+    manifest.write_text(__import__("json").dumps({"models": {"jina-code": custom}}))
+    with pytest.raises(Exception, match="cannot replace built-in"):
+        model_catalog()
 
 
 # ---------------------------------------------------------------------------------------- tools
@@ -167,6 +208,43 @@ async def test_model_change_triggers_rebuild(workspace, tmp_path):
     bad = subprocess.run([sys.executable, "-m", "staticsight.server", "search", "x"],
                          env={**env, "STATICSIGHT_EMBED_MODEL": "nope"}, capture_output=True, text=True)
     assert bad.returncode == 1 and "Unknown embedding model" in bad.stderr
+
+
+@pytest.mark.skipif(not TS_DIST.exists() or not shutil.which("node"), reason="TypeScript build not available")
+def test_model_cli_list_and_selection_match_typescript(tmp_path):
+    env = {**os.environ, "STATICSIGHT_CACHE_DIR": str(tmp_path / "cache")}
+    env.pop("STATICSIGHT_EMBED_MODEL_DIR", None)
+    env.pop("STATICSIGHT_MODEL_MANIFEST", None)
+    py = subprocess.run([sys.executable, "-m", "staticsight.server", "model", "list", "--model", "minilm-fast"],
+                        env=env, capture_output=True, text=True)
+    ts = subprocess.run(["node", str(TS_DIST), "model", "list", "--model=minilm-fast"],
+                        env=env, capture_output=True, text=True)
+    assert py.returncode == ts.returncode == 0
+    assert py.stdout == ts.stdout
+    assert "* minilm-fast — 384 dims, 256 tokens, Apache-2.0" in py.stdout
+    assert "jina-code — 768 dims" in py.stdout and "bge-small-en — 384 dims" in py.stdout
+
+    py_status = subprocess.run([sys.executable, "-m", "staticsight.server", "model", "status", "--model", "minilm-fast"],
+                               env=env, capture_output=True, text=True)
+    ts_status = subprocess.run(["node", str(TS_DIST), "model", "status", "--model", "minilm-fast"],
+                               env=env, capture_output=True, text=True)
+    assert py_status.returncode == ts_status.returncode == 1
+    assert py_status.stdout == ts_status.stdout and "minilm-fast@1110a243" in py_status.stdout
+
+    external = tmp_path / "models.json"
+    external.write_text(__import__("json").dumps({"models": {"my-model": {
+        "description": "external parity model", "repo": "example/model", "revision": "1" * 40,
+        "license": "Apache-2.0", "dims": 384, "max_tokens": 256, "pooling": "mean",
+        "onnx": "onnx/model.onnx",
+        "files": {"onnx/model.onnx": "2" * 64, "tokenizer.json": "3" * 64},
+    }}}))
+    ext_env = {**env, "STATICSIGHT_MODEL_MANIFEST": str(external)}
+    py_ext = subprocess.run([sys.executable, "-m", "staticsight.server", "model", "list", "--model", "my-model"],
+                            env=ext_env, capture_output=True, text=True)
+    ts_ext = subprocess.run(["node", str(TS_DIST), "model", "list", "--model", "my-model"],
+                            env=ext_env, capture_output=True, text=True)
+    assert py_ext.returncode == ts_ext.returncode == 0 and py_ext.stdout == ts_ext.stdout
+    assert "* my-model — 384 dims, 256 tokens, Apache-2.0" in py_ext.stdout
 
 
 @pytest.mark.skipif(not TS_DIST.exists() or not shutil.which("node"), reason="TypeScript build not available")

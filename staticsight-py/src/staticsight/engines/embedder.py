@@ -7,6 +7,7 @@ one implementation is queryable by the other. `test-hash` is a deterministic, de
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import threading
@@ -25,8 +26,74 @@ class SemanticUnavailable(StaticSightError):
     title = "Semantic search is not available"
 
 
+_MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_ONNX_PATHS = frozenset(("onnx/model_quantized.onnx", "onnx/model.onnx", "model.onnx"))
+
+
+def _validate_external_model(name: str, spec: Any, manifest: str) -> dict[str, Any]:
+    where = f"`{manifest}` model `{name}`"
+    if not _MODEL_NAME.fullmatch(name):
+        raise SemanticUnavailable(f"{where} has an invalid name.", "Use lowercase letters, digits, '.', '_' or '-'.")
+    if not isinstance(spec, dict):
+        raise SemanticUnavailable(f"{where} must be a JSON object.")
+    required = ("description", "repo", "revision", "license", "dims", "max_tokens", "pooling", "onnx", "files")
+    missing = [k for k in required if k not in spec]
+    if missing:
+        raise SemanticUnavailable(f"{where} is missing: {', '.join(missing)}.")
+    if not isinstance(spec["description"], str) or not spec["description"].strip():
+        raise SemanticUnavailable(f"{where} has an invalid non-empty `description`.")
+    if not isinstance(spec["license"], str) or not spec["license"].strip():
+        raise SemanticUnavailable(f"{where} has an invalid non-empty `license`.")
+    if not isinstance(spec["repo"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", spec["repo"]):
+        raise SemanticUnavailable(f"{where} has an invalid `repo` (expected `owner/name`).")
+    if not isinstance(spec["revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", spec["revision"]):
+        raise SemanticUnavailable(f"{where} must pin `revision` to a full 40-character commit SHA.")
+    if not isinstance(spec["dims"], int) or isinstance(spec["dims"], bool) or spec["dims"] <= 0:
+        raise SemanticUnavailable(f"{where} has an invalid positive integer `dims`.")
+    if not isinstance(spec["max_tokens"], int) or isinstance(spec["max_tokens"], bool) or spec["max_tokens"] <= 0:
+        raise SemanticUnavailable(f"{where} has an invalid positive integer `max_tokens`.")
+    if spec["pooling"] not in ("mean", "cls"):
+        raise SemanticUnavailable(f"{where} has unsupported pooling `{spec['pooling']}` (use `mean` or `cls`).")
+    if spec["onnx"] not in _ONNX_PATHS:
+        raise SemanticUnavailable(f"{where} has unsupported ONNX path `{spec['onnx']}`.")
+    files = spec["files"]
+    if not isinstance(files, dict) or "tokenizer.json" not in files or spec["onnx"] not in files:
+        raise SemanticUnavailable(f"{where} `files` must include `tokenizer.json` and `{spec['onnx']}`.")
+    for rel, sha in files.items():
+        if not isinstance(rel, str) or not rel or "\\" in rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise SemanticUnavailable(f"{where} has an unsafe file path `{rel}`.")
+        if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
+            raise SemanticUnavailable(f"{where} has an invalid SHA-256 for `{rel}`.")
+    return spec
+
+
+def model_catalog() -> tuple[str, dict[str, dict[str, Any]], str]:
+    """(built-in default, merged models, optional external manifest path). External models cannot replace built-ins."""
+    data = shared_json("semantic/models.json")
+    models = dict(data["models"])
+    manifest = os.environ.get("STATICSIGHT_MODEL_MANIFEST", "").strip()
+    if not manifest:
+        return data["default"], models, ""
+    path = Path(manifest).expanduser()
+    try:
+        extra = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SemanticUnavailable(f"Could not read model manifest `{path}`: {exc}.") from exc
+    if not isinstance(extra, dict) or not isinstance(extra.get("models"), dict):
+        raise SemanticUnavailable(f"Model manifest `{path}` must contain a `models` object.")
+    for name, spec in extra["models"].items():
+        if name in models:
+            raise SemanticUnavailable(
+                f"Model manifest `{path}` cannot replace built-in model `{name}`.",
+                "Choose a new model name; built-in revisions and checksums are immutable.",
+            )
+        models[name] = _validate_external_model(name, spec, str(path))
+    return data["default"], models, str(path)
+
+
 def model_spec(name: str) -> dict[str, Any]:
-    models = shared_json("semantic/models.json")["models"]
+    _, models, _ = model_catalog()
     if name not in models:
         raise SemanticUnavailable(
             f"Unknown embedding model `{name}`.", f"Use one of: {', '.join(sorted(models))} (STATICSIGHT_EMBED_MODEL)."
@@ -307,14 +374,21 @@ def _import_onnxruntime() -> Any:
 
 
 def dependencies_ok() -> None:
-    import importlib.util
+    """Import the native semantic dependencies, not just find their packages.
 
-    missing = [m for m in ("numpy", "onnxruntime", "tokenizers") if importlib.util.find_spec(m) is None]
-    if missing:
+    This catches Windows DLL/runtime problems during `doctor` instead of on the first semantic-search request.
+    """
+    try:
+        import numpy  # noqa: F401
+        from tokenizers import Tokenizer  # noqa: F401
+
+        _import_onnxruntime()
+    except (ImportError, OSError) as exc:
+        name = getattr(exc, "name", None) or type(exc).__name__
         raise SemanticUnavailable(
-            f"Python packages for semantic search are missing ({missing[0]}).",
+            f"Python packages for semantic search are missing or cannot load ({name}).",
             'Install them (onnxruntime, tokenizers, numpy) with `python3 staticsight.py --install --semantic` from the StaticSight clone, or `pip install -r requirements-semantic.txt`.',
-        )
+        ) from exc
 
 
 def numpy_ok() -> None:

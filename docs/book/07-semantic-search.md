@@ -29,6 +29,11 @@ So semantic search is, in essence:
 The model runs locally with ONNX Runtime on the CPU: no GPU, no PyTorch, no server, no network after the first
 download. The model file is pinned to an exact revision and verified with sha256.
 
+`jina-code` remains the default code-specialized model. Users can list and pre-download optional local models with
+`staticsight model list` and `staticsight model download --model NAME`; selection for indexing and MCP is explicit
+through `STATICSIGHT_EMBED_MODEL`. An optional `STATICSIGHT_MODEL_MANIFEST` adds pinned, SHA-256-verified Hugging Face
+ONNX exports without allowing built-in definitions to be replaced.
+
 ## Cutting code into chunks
 
 What counts as a "piece" matters a lot. A whole file mixes many ideas; a single line has too little meaning.

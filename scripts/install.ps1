@@ -315,7 +315,8 @@ if ($cppDir -and -not (Find-Engine 'cppcheck') -and (Test-Path (Join-Path $cppDi
 if ($pyPlan.Steps.Count -gt 0 -and -not (Invoke-PythonPlan $pyPlan)) { Write-Output 'Python package installation failed (see above).'; exit 1 }
 
 # Refresh PATH for this session from the machine + user scopes, then re-check.
-if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+# `$IsWindows` exists only in PowerShell Core; Windows PowerShell 5.1 runs this script too, under StrictMode.
+if ($env:OS -eq 'Windows_NT') {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $env:Path
 }
 Write-Output ''

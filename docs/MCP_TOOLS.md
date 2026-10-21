@@ -4,18 +4,33 @@
 
 # StaticSight MCP tool reference
 
-StaticSight exposes **16 MCP tools** (15 read-only; `refresh_semantic_index` writes only to StaticSight's data folder `.staticsight/`) and **1 prompt**. The Python and TypeScript servers behave
-identically. Names, parameters and the descriptions the agent sees come from
+StaticSight exposes **33 MCP tools** and **5 prompts**. No tool changes your source files: StaticSight writes only to
+its data folder `.staticsight/` (indexes, the code graph, stored findings and result pages). The Python and TypeScript
+servers behave identically. Names, parameters and the descriptions the agent sees come from
 [`shared/tool-spec.json`](../shared/tool-spec.json).
 
 <!-- nav:toc -->
-**On this page:** [1. review_changes](#1-review_changes) · [2. get_diff_scopes](#2-get_diff_scopes) · [3. get_enclosing_scope](#3-get_enclosing_scope) · [4. get_branch_skeleton](#4-get_branch_skeleton) · [5. get_upstream_callers](#5-get_upstream_callers) · [6. get_symbol_definition](#6-get_symbol_definition) · [7. get_symbol_contract](#7-get_symbol_contract) · [8. track_struct_risks](#8-track_struct_risks) · [9. get_include_blast_radius](#9-get_include_blast_radius) · [10. track_state_mutations](#10-track_state_mutations) · [11. track_lock_order](#11-track_lock_order) · [12. run_file_static_audit](#12-run_file_static_audit) · [13. semantic_search](#13-semantic_search) · [14. find_similar_code](#14-find_similar_code) · [15. refresh_semantic_index](#15-refresh_semantic_index) · [16. get_index_status](#16-get_index_status) · [Prompt: review_cpp_changes](#prompt-review_cpp_changes) · [Engines at a glance](#engines-at-a-glance)
+**On this page:** [1. review_changes](#1-review_changes) · [2. get_diff_scopes](#2-get_diff_scopes) · [3. get_enclosing_scope](#3-get_enclosing_scope) · [4. get_branch_skeleton](#4-get_branch_skeleton) · [5. get_upstream_callers](#5-get_upstream_callers) · [6. get_symbol_definition](#6-get_symbol_definition) · [7. get_symbol_contract](#7-get_symbol_contract) · [8. track_struct_risks](#8-track_struct_risks) · [9. get_include_blast_radius](#9-get_include_blast_radius) · [10. track_state_mutations](#10-track_state_mutations) · [11. track_lock_order](#11-track_lock_order) · [12. run_file_static_audit](#12-run_file_static_audit) · [13. semantic_search](#13-semantic_search) · [14. find_similar_code](#14-find_similar_code) · [15. refresh_semantic_index](#15-refresh_semantic_index) · [16. get_index_status](#16-get_index_status) · [17. check_my_edit](#17-check_my_edit) · [18. plan_change](#18-plan_change) · [19. get_context_pack](#19-get_context_pack) · [20. get_impact](#20-get_impact) · [21. get_call_paths](#21-get_call_paths) · [22. find_entry_paths](#22-find_entry_paths) · [23. get_type_hierarchy](#23-get_type_hierarchy) · [24. query_graph](#24-query_graph) · [25. get_lock_graph](#25-get_lock_graph) · [26. find_switch_coverage](#26-find_switch_coverage) · [27. find_counterparts](#27-find_counterparts) · [28. find_related_tests](#28-find_related_tests) · [29. get_line_history](#29-get_line_history) · [30. get_change_hotspots](#30-get_change_hotspots) · [31. find_log_origin](#31-find_log_origin) · [32. verify_finding](#32-verify_finding) · [33. get_more](#33-get_more) · [Prompts](#prompts) · [Engines at a glance](#engines-at-a-glance)
 <!-- /nav:toc -->
 
 Every tool returns concise Markdown with `file:line` references, and keeps to an output budget
 (`STATICSIGHT_MAX_CHARS`, default 6000 characters; 16000 for `review_changes`). Lists longer than
-`STATICSIGHT_MAX_RESULTS` (default 15) end with "…and N more". Errors never crash the server. They come
-back as a card like `### ❌ Invalid argument` with a 💡 hint.
+`STATICSIGHT_MAX_RESULTS` (default 15) end with "…and N more. Next: `get_more("P1a2b3c")`": the rest is kept, and
+[`get_more`](#33-get_more) returns it page by page. Errors never crash the server. They come back as a card like
+`### ❌ Invalid argument` with a 💡 hint.
+
+**Findings have IDs.** Leaks on exit paths, cppcheck errors and warnings, ignored results, lock-order cycles, locks
+taken twice or held across blocking calls, unlocked accesses, switch gaps, unchanged counterparts and stale callers
+carry a short ID such as `F7a0cc5`. The same issue gets the same ID on every run and in both implementations.
+[`verify_finding`](#32-verify_finding) re-checks one on the current code. Over MCP, a result that contains findings
+also carries them as **structured content** (`{"findings": [{"id", "kind", "confidence", "path", "line", "symbol",
+"message", "function"}]}`) next to the Markdown; clients that do not read structured content lose nothing.
+
+**The code graph.** The tools marked "code graph" read a small SQLite database of definitions, calls and includes
+(`.staticsight/graph.db`), built from ctags and the comment-stripped source. Every call checks it against the files
+first: nothing changed → answer; up to 300 changed files (after a `git pull`, a branch switch or an edit) → re-parse
+them, then answer; more → refresh in the background and answer from the previous graph (or GNU Global) with a note.
+You never have to rebuild it by hand. See [the code graph](code-graph.md).
 
 **Common conventions**
 - `file_path` is relative to `WORKSPACE_ROOT`. Absolute paths inside the workspace are accepted. Paths that
@@ -30,25 +45,76 @@ back as a card like `### ❌ Invalid argument` with a 💡 hint.
 - Output markers: ✏️ changed in the diff · 🔶 inside a changed function · 🛑 early exit · ⚠️ heuristic warning
   · 🔒 lock · 📥 allocation · 📤 release.
 
+**Review and edit**
+
 | # | Tool | One-line purpose |
 |---|---|---|
 | 1 | [`review_changes`](#1-review_changes) | Full review bundle for the current diff in one call |
+| 17 | [`check_my_edit`](#17-check_my_edit) | Fast self-check of your uncommitted edits, after every edit |
+| 18 | [`plan_change`](#18-plan_change) | Every place to touch before you edit a function, in order |
 | 2 | [`get_diff_scopes`](#2-get_diff_scopes) | Which functions/types/macros the diff touches |
+| 12 | [`run_file_static_audit`](#12-run_file_static_audit) | cppcheck findings for one file, mapped to the diff |
+
+**Read code cheaply**
+
+| # | Tool | One-line purpose |
+|---|---|---|
 | 3 | [`get_enclosing_scope`](#3-get_enclosing_scope) | Full code of the function/class around a line |
 | 4 | [`get_branch_skeleton`](#4-get_branch_skeleton) | Control-flow tree with lock/alloc/leak annotations |
-| 5 | [`get_upstream_callers`](#5-get_upstream_callers) | Who calls a function, and whether they use the result |
+| 19 | [`get_context_pack`](#19-get_context_pack) | Everything about one function in one call, within a budget |
 | 6 | [`get_symbol_definition`](#6-get_symbol_definition) | Where a symbol is defined (incl. overloads) |
 | 7 | [`get_symbol_contract`](#7-get_symbol_contract) | Signature, qualifiers, doc comment, obligations |
+
+**Calls, reach and structure (code graph)**
+
+| # | Tool | One-line purpose |
+|---|---|---|
+| 5 | [`get_upstream_callers`](#5-get_upstream_callers) | Who calls a function, and whether they use the result |
+| 20 | [`get_impact`](#20-get_impact) | Callers of callers, several levels deep, with entry points and tests |
+| 21 | [`get_call_paths`](#21-get_call_paths) | The call chains from one function to another |
+| 22 | [`find_entry_paths`](#22-find_entry_paths) | Which program entry points, threads and callbacks reach a function |
+| 23 | [`get_type_hierarchy`](#23-get_type_hierarchy) | Base and derived classes, virtual methods and their overrides |
+| 24 | [`query_graph`](#24-query_graph) | Free-form structural questions: `callers*2 of X in src/*` |
+
+**Memory, headers and concurrency**
+
+| # | Tool | One-line purpose |
+|---|---|---|
 | 8 | [`track_struct_risks`](#8-track_struct_risks) | Code that depends on a struct's exact byte layout |
 | 9 | [`get_include_blast_radius`](#9-get_include_blast_radius) | Files affected by a header change |
 | 10 | [`track_state_mutations`](#10-track_state_mutations) | Reads/writes of shared state and their locking |
 | 11 | [`track_lock_order`](#11-track_lock_order) | Lock-acquisition order: potential deadlocks, same lock twice, locks held across blocking calls |
-| 12 | [`run_file_static_audit`](#12-run_file_static_audit) | cppcheck findings for one file, mapped to the diff |
+| 25 | [`get_lock_graph`](#25-get_lock_graph) | Map of a module's locks, who takes them, and in which order (Mermaid) |
+
+**Is the change complete?**
+
+| # | Tool | One-line purpose |
+|---|---|---|
+| 26 | [`find_switch_coverage`](#26-find_switch_coverage) | Switches that miss a value of an enum |
+| 27 | [`find_counterparts`](#27-find_counterparts) | encode/decode pairs, `_win`/`_posix` twins, files that change together |
+| 28 | [`find_related_tests`](#28-find_related_tests) | The tests that reach a function, or that none do |
+
+**History and investigation**
+
+| # | Tool | One-line purpose |
+|---|---|---|
+| 29 | [`get_line_history`](#29-get_line_history) | Why lines look the way they do; earlier fixes on them |
+| 30 | [`get_change_hotspots`](#30-get_change_hotspots) | Files that change often, need fixes and are used widely |
+| 31 | [`find_log_origin`](#31-find_log_origin) | From a log line to the code that printed it |
 | 13 | [`semantic_search`](#13-semantic_search) | Find code by meaning across every language in the repo |
 | 14 | [`find_similar_code`](#14-find_similar_code) | Copy-paste twins / parallel implementations of a region |
+
+**Trust and housekeeping**
+
+| # | Tool | One-line purpose |
+|---|---|---|
+| 32 | [`verify_finding`](#32-verify_finding) | Re-check a finding by its ID before reporting it |
+| 33 | [`get_more`](#33-get_more) | The next page of a truncated list |
 | 15 | [`refresh_semantic_index`](#15-refresh_semantic_index) | Build or refresh the semantic index on demand |
-| 16 | [`get_index_status`](#16-get_index_status) | Index states (GNU Global + semantic), engines, model |
-| — | [`review_cpp_changes` prompt](#prompt-review_cpp_changes) | The recommended review workflow |
+| 16 | [`get_index_status`](#16-get_index_status) | Index states (GNU Global, semantic, code graph), engines, model |
+
+**Prompts:** [`review_cpp_changes`, `investigate_hang`, `investigate_incident`, `plan_refactor`, `onboard_me`](#prompts).
+Numbers are stable section numbers (1-16 are the original tools); the MCP server lists the tools in the order above.
 
 ---
 
@@ -76,9 +142,16 @@ the output budget. This is the entry point for "review my changes" and "what cou
    run) when a changed function takes a lock and there is a cycle, a lock taken twice, or a lock held across a blocking call.
 9. **Calls introduced by the diff:** functions newly called in added lines. Check their contracts.
 10. **Similar code elsewhere:** near-duplicates of changed functions, when the semantic index exists.
-11. **Reviewer checklist:** items generated from what was found, plus two standing reminders.
+11. **Reach of changed functions** (code graph): how many functions are affected within 3 calls, which program entry
+    points and threads reach each changed function, and which tests do (⚠️ none).
+12. **Completeness:** switches that miss a value of an enum the change uses, and `_win`/`_posix` twins of changed
+    functions that were not changed.
+13. **Earlier fixes on the changed lines:** bug-fix or revert commits (before this change) that touched them.
 
-**Engines:** git, ctags, GNU Global/ripgrep, cppcheck.
+The **reviewer checklist** comes last: items generated from what was found, plus two standing reminders. Its space is
+reserved, so it survives even when the sections above it are shortened to fit the budget.
+
+**Engines:** git, ctags, GNU Global/ripgrep, cppcheck, the code graph.
 
 ---
 
@@ -150,6 +223,7 @@ without reading the whole body.
   `if (buf == nullptr)` are not flagged.
 - ✏️ on lines changed in the current diff.
 - A summary line with the number of returns, throws, early exits, loops and potential leak paths.
+- Each potential leak carries a finding ID in brackets, e.g. `[F7a0cc5]`.
 
 **How it works:** comments and string literals are blanked first (column-preserving, raw strings and digit
 separators included). Nesting comes from brace depth, not indentation. Single-statement `if`/`else` bodies are
@@ -166,7 +240,8 @@ handled. This is a heuristic, and the output says so.
 | `symbol` | string | required | Function/method name. |
 | `path_glob` | string | `""` | Restrict caller files. |
 
-**How it works:** `global -xr` against the background GNU Global index. If the index is not available, it falls
+**How it works:** `global --result=ctags -r` against the background GNU Global index; the tab-delimited result preserves
+paths containing spaces, and StaticSight reads the source line itself. If the index is not available, it falls
 back to a ripgrep search for `symbol(` and `&symbol`, and the output says "ripgrep fallback".
 
 **Filtering and classification**
@@ -178,8 +253,10 @@ back to a ripgrep search for `symbol(` and `&symbol`, and the output says "ripgr
   - **result explicitly discarded**, `(void)f(x)`
   - **referenced (address/callback)**
 - For `void` functions no classification is shown.
-- The header states the return type and how many callers ignore it.
+- The header states the return type and how many callers ignore it. Each ignored result carries a finding ID.
 - Call sites are grouped by file. When results are truncated, the top files are listed.
+- When the method is virtual (from the code graph), a note names the overrides: a call through a base pointer can
+  reach any of them, and [`get_impact`](#20-get_impact) resolves them through the class hierarchy.
 
 ---
 
@@ -192,7 +269,7 @@ typedefs, namespaces, variables and members. Overloads are included.
 |---|---|---|---|
 | `symbol` | string | required | Symbol name. |
 
-**How it works:** `global -xd`, enriched with ctags kind and signature. If GNU Global finds nothing (for example
+**How it works:** `global --result=ctags -d`, enriched with ctags kind and signature. If GNU Global finds nothing (for example
 data members), or is unavailable, it uses ripgrep to find candidate files and ctags to find definitions. The
 engine used is shown in the header.
 
@@ -363,6 +440,10 @@ lock hierarchies are not modelled. Treat findings as precise leads to confirm.
   or several Win32 types), cppcheck also gets `--library=windows --platform=win64 -D_WIN32 -D_MSC_VER=1930`. It then
   knows the Win32 API, for example reporting a `CreateFileW` handle that isn't closed on an error path as
   `resourceLeak`. This applies on any host OS; `STATICSIGHT_CPPCHECK_MSVC=0` disables it and `=1` forces it.
+- **Project allocators:** doc comments such as "MUST be paired with release_buffer()" or "free with pool_free()" are
+  turned into a cppcheck library (`.staticsight/cppcheck-project.cfg`, passed with `--library=`). cppcheck then
+  reports leaks of your own allocators too, not only `malloc`/`new`; the output names the pairs it used.
+- Errors and warnings carry finding IDs.
 - If included headers can't be parsed (for example an unknown macro), it automatically re-runs without include
   paths and names the macro. Extra flags can be passed with `STATICSIGHT_CPPCHECK_ARGS`.
 - Findings are sorted error → warning → portability → performance → style. Each shows its id, CWE number,
@@ -444,27 +525,407 @@ location and age, and whether `ctags`, `global`, `gtags`, `rg`, `cppcheck` and `
 - It is refreshed incrementally after `STATICSIGHT_REINDEX_SECONDS` (default 300).
 - Graph tools wait up to 2 seconds for it, then use the ripgrep fallback.
 
+It also reports the **code graph**: state (not built, building with progress, ready with the time of the last refresh
+and the HEAD it saw), counts of files, definitions, calls and includes, and the database path.
+
 ---
 
-## Prompt: `review_cpp_changes`
+## 17. `check_my_edit`
 
-An MCP prompt (optional argument `focus`, e.g. `"locking"`). It gives the agent the step-by-step review workflow,
-a checklist of small but costly C++ issues, and the reporting format (Blocker/Major/Minor/Nit, evidence, fix,
-verdict). The same guidance is in the Copilot skill `.github/skills/staticsight-cpp-review/SKILL.md`.
+**What it does:** a fast self-check of your own uncommitted edits, meant to run after every edit while you code
+(`review_changes` is the full review before committing).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `baseline` | string | `"last"` | `"last"`: only functions changed since the previous `check_my_edit` call. `"HEAD"`: every uncommitted change. |
+
+**For each changed function it checks**
+- **Exit paths that leak** what the function allocates (the branch-skeleton analysis).
+- **cppcheck errors on the changed lines**, including leaks of project allocators (see section 12).
+- **Callers outside the change that still use an old signature** (❌ strong: the call will not compile or will
+  call the wrong overload).
+- **Switches that miss a value** of an enum the changed lines use.
+- **Platform twins that were not changed** (`_win`/`_posix`, same name in another platform folder).
+
+Every finding has an ID; the list is sorted strongest first. The baseline is a small snapshot of function-body hashes in
+`.staticsight/edit_snapshot.json`.
+
+**Example** (test repository, after adding a `len` parameter and an early return to `decode_msg`, and a guard to the
+POSIX `start_timer`):
+
+```text
+### 🩺 EDIT CHECK: 2 changed functions since the last check
+- `decode_msg` (`src/net/proto.cpp:16`): signature `int (const char * in,MsgType * t)` → `int (const char * in,MsgType * t,int len)`
+- `start_timer` (`src/platform/timer_posix.cpp:3`)
+
+**5 findings**
+- ❌ `F9ff2d6` `src/net/proto.cpp:19` Memory leak: scratch
+- ❌ `F5aae03` `tests/test_proto.cpp:9` `TEST(Proto,RoundTrip)` calls `decode_msg` but its file is not part of the change, so it still uses the old signature
+- ⚠️ `F5d6793` `src/net/proto.cpp:19` return at line 19 leaves `scratch` (L17) unreleased
+- ⚠️ `F9aa704` `src/net/proto.cpp:37` switch in msg_name misses Ping (falls into default)
+- ⚠️ `Ff8880b` `src/platform/timer_win.cpp:3` `start_timer` (src/platform/timer_posix.cpp:3) changed but its counterpart `start_timer` (src/platform/timer_win.cpp:3) did not
+```
+
+---
+
+## 18. `plan_change`
+
+**What it does:** plans a change to one function before you edit it, as an ordered checklist.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `symbol` | string | required | Function name, optionally qualified. |
+| `change` | string | `""` | Short description of the change, e.g. `add a timeout parameter`. Words such as *signature*, *parameter*, *rename*, *remove* or *return type* turn "check the call sites" into "update the call sites". |
+
+**The plan lists:** the definition; every declaration; overrides (virtual methods); call sites grouped by file with
+line ranges; naming pairs and platform twins to mirror; how many files include its header; the tests that reach it
+(or "add a test first"); the contract to keep (`@pre`, `@warning`, MUST/NEVER); and risks: earlier fixes on these lines,
+locks it takes, callers that ignore its result.
+
+```text
+### 🗺️ CHANGE PLAN: `decode_msg` (add a length parameter)
+**Target:** `decode_msg` (`src/net/proto.cpp:16`) · returns `int`
+
+**Steps**
+1. [ ] Edit the definition: `src/net/proto.cpp:16`
+2. [ ] Update the declaration: `src/net/proto.hpp:6`
+3. [ ] Update 1 call site in 1 file: `tests/test_proto.cpp` L9
+4. [ ] Mirror the change in counterparts: `encode_msg` (`src/net/proto.cpp:5`)
+5. [ ] Expect a rebuild of `src/net/proto.hpp` includers: 2 files include it directly (…)
+6. [ ] Run the tests that reach it: `TEST(Proto,RoundTrip)` (`tests/test_proto.cpp:5`)
+
+**Risks**
+- 1 earlier fix touched it: `c945b10` fix: crash on null buffer in decode_msg. Do not undo it.
+- 1 caller ignores the `int` result: new error values will go unnoticed there.
+```
+
+---
+
+## 19. `get_context_pack`
+
+**What it does:** everything an agent needs about one function in a single call, within a character budget, instead
+of five or six separate calls.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | string | required | Function name (`Router::process_packet`) or `file:line` inside it. |
+| `max_chars` | integer | `6000` | Budget for the whole pack (2000-12000). |
+
+**Sections, in priority order:** location and signature; the documented contract and its obligations; the branch
+skeleton (with leak IDs); callers with result used/ignored; callees in the repository and outside it (libraries,
+SDK, macros); types in the signature; locks it takes; tests that reach it; recent git history with fixes marked 🐞.
+Lower sections are dropped first when the budget is tight.
+
+---
+
+## 20. `get_impact`
+
+**What it does:** shows everything a change to a function can affect, several levels deep, in one call.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `symbol` | string | required | Function name, optionally qualified. |
+| `depth` | integer | `3` | Call levels to follow (1-6). |
+| `direction` | string | `"callers"` | `callers` (who is affected) or `callees` (what it depends on). |
+| `path_glob` | string | `""` | Restrict results to matching files. |
+
+Each call site shows `file:line`, whether the result is used or ignored, and tags callers that are 🚪 program entry
+points (`main`, `WinMain`, `DllMain`, `ServiceMain`), 🧵 thread start routines or callbacks, or 🧪 tests. Virtual
+methods include their overrides. A **Reach** line sums up functions, files, modules, entry points and tests. When the
+code graph is not ready yet, it answers with direct callers from GNU Global and says so.
+
+```text
+### 🌊 IMPACT: `process_packet` (callers, depth 3)
+**Target:** `Router::process_packet` — `src/router.cpp:9` · returns `int`
+- **Depth 1:** 4 call sites in 4 functions
+  - `Listener::on_socket_read` — `src/net/listener.cpp:9` — result used
+  - `Listener::dispatch_batch` — `src/net/listener.cpp:17` — ⚠️ result ignored
+  - `pump_loop` 🧵 thread/callback — `src/net/server_loop.cpp:9` — ⚠️ result ignored
+  - `test_drop_invalid` 🧪 test — `tests/test_router.cpp:6` — ⚠️ result ignored
+- **Depth 2:** 1 call site in 1 function
+  - `run_server` → `pump_loop` — `src/net/server_loop.cpp:13` — starts as a thread/callback
+- **Depth 3:** 1 call site in 1 function
+  - `main` 🚪 program entry → `run_server` — `src/main.cpp:4` — result used
+**Reach:** 6 functions in 4 files; modules: `src/net` (4), `src` (1), `tests` (1); entry points: `main`, `pump_loop`; tests: `test_drop_invalid`.
+```
+
+**How calls are resolved (heuristic, labelled in the output):** by name, narrowed by class where the code says so
+(`C::f()`, or an unqualified call inside a member of `C`); `obj.f()` may reach any method `f`; a member call never
+reaches a free function. Threads and callbacks (`std::thread t(fn)`, `CreateThread(…, fn, …)`, `&fn` passed as an
+argument) are followed; other function pointers are not.
+
+---
+
+## 21. `get_call_paths`
+
+**What it does:** the shortest call chains (up to 3) from one function to another, with the `file:line` and source
+line of every hop, threads and callbacks included. Use it for "how does the handler end up here?", "is this path
+possible?", or to explain a stack trace.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `from_symbol` | string | required | Where the path starts, e.g. `main` or an RPC handler. |
+| `to_symbol` | string | required | Where it must arrive. |
+| `max_depth` | integer | `8` | Longest chain considered. |
+
+```text
+1. `main` → `run_server` → `pump_loop` → `Router::process_packet`
+   - `src/main.cpp:4` in `main`: calls `run_server`: `return run_server();`
+   - `src/net/server_loop.cpp:13` in `run_server`: starts `pump_loop` as a thread/callback: `std::thread worker(pump_loop);`
+   - `src/net/server_loop.cpp:9` in `pump_loop`: calls `process_packet`: `g_router.process_packet(&p);`
+```
+
+---
+
+## 22. `find_entry_paths`
+
+**What it does:** answers "can outside input reach this code, and how?". It walks callers back to program entry points,
+thread start routines and registered callbacks, shows the chain from each, and lists the tests that reach it. When
+nothing reaches it, it says so and names the likely reasons (function pointer, virtual call through an interface, code
+outside the repository, dead code).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `symbol` | string | required | Function name. |
+| `max_depth` | integer | `10` | Longest chain considered. |
+
+---
+
+## 23. `get_type_hierarchy`
+
+**What it does:** a class's place in the inheritance tree (bases, and every derived class recursively) and a table of
+virtual methods: which class introduces each one (marked *pure* when it is) and every override with `file:line`. Built
+from Universal Ctags' `inherits` and `properties` fields, without compiling.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `type_name` | string | required | Class or struct, optionally qualified. |
+
+```text
+Transport  (src/net/transport.hpp:5)
+└── TcpTransport  (src/net/transport.hpp:12)
+    └── TlsTransport  ◀ this type  (src/net/transport.hpp:18)
+
+| Method | Introduced in | Overridden in |
+|---|---|---|
+| `send_frame` | `Transport` (pure) `src/net/transport.hpp:8` | `TcpTransport` `src/net/transport.hpp:14`, `TlsTransport` `src/net/transport.hpp:20` |
+```
+
+---
+
+## 24. `query_graph`
+
+**What it does:** free-form structural questions for when no dedicated tool fits.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `query` | string | required | `<relation>[*<depth>] of <name> [in <glob>]`, or `entry-points [in <glob>]`. |
+
+Relations: `callers`, `callees`, `bases`, `derived`, `overrides`, `members`, `includers`, `includes`, `definitions`.
+Depth goes up to 6. Examples: `callers*2 of process_packet`, `derived of Transport`, `members of Router`,
+`includers*2 of packet.hpp in src/*`, `entry-points`. A query it cannot parse returns the grammar and examples.
+
+---
+
+## 25. `get_lock_graph`
+
+**What it does:** maps the locks of a module: every lock, the functions that take it, and which lock is taken while
+another is held, as a small Mermaid diagram plus a table. Use it to understand a locking design before adding or
+reordering locks; [`track_lock_order`](#11-track_lock_order) finds the problems.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `path_glob` | string | `""` | Restrict the scanned files. |
+| `symbol` | string | `""` | Focus on one lock. |
+
+```mermaid
+graph LR
+  L1["ConnPool::pool_mutex"]
+  L2["ConnPool::stats_mutex"]
+  L1 -->|"rebalance"| L2
+  L2 -->|"report via drain"| L1
+```
+
+---
+
+## 26. `find_switch_coverage`
+
+**What it does:** checks every `switch` over an enum against the enum's values, for the classic "added a value, forgot
+a case" bug. Plain and `enum class` enums are supported; `case Enum::Value:` and `case Value:` both count.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `enum_name` | string | required | Enum name, optionally qualified. |
+
+```text
+Defined at `src/net/proto.hpp:3` with 5 values: `Ack`, `Close`, `Data`, `Hello`, `Ping`.
+2 switches, 1 with missing values:
+- ✅ `src/net/proto.cpp:6` in `encode_msg`: all 5 values handled
+- ⚠️ `src/net/proto.cpp:31` in `msg_name`: missing `Ping`; handled by `default:` — check that is right `F7b1502`
+```
+
+A missing value with no `default:` is ❌ (strong): the value falls through silently.
+
+---
+
+## 27. `find_counterparts`
+
+**What it does:** finds code that should change together with a function, and, when the function is changed in the
+current diff, flags the counterparts that were not.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `symbol` | string | required | Function name. |
+
+- **Naming pairs:** encode/decode, serialize/deserialize, open/close, register/unregister, acquire/release,
+  alloc/free, create/destroy, start/stop, send/recv, … (about 35 pairs, in any naming style).
+- **Platform or `#ifdef` twins:** the same function in another platform file (`_win`/`_posix`/`linux`/`mac`/…) or
+  twice in one file.
+- **Files that usually change together** (git history): at least 2 shared commits and half of the file's commits;
+  commits touching more than 20 files are ignored.
+
+---
+
+## 28. `find_related_tests`
+
+**What it does:** lists the tests that exercise a function: test functions (in test folders or files, including gtest,
+Catch and Boost `TEST` macros, shown as `TEST(Suite,Name)`) that reach it within `depth` calls, plus test files that
+mention it. It says so when no test covers it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `symbol` | string | required | Function name. |
+| `depth` | integer | `3` | Call levels to follow (1-6). |
+
+---
+
+## 29. `get_line_history`
+
+**What it does:** explains why lines look the way they do and whether they were fixed before: `git blame` per line
+(ignoring whitespace and moved or copied code) and every commit that changed the range. Commits whose subject says
+fix, bug, revert, crash, leak, race, deadlock, overflow, regression or CVE are marked 🐞, and the output warns when a
+change could undo one. No author names are shown.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `file_path` | string | required | File to inspect. |
+| `start_line` | integer | required | First line. |
+| `end_line` | integer | `0` | Last line (0: only `start_line`). |
+
+```text
+**Last change per line** (git blame, ignoring whitespace and moved code)
+- L14-16 `d4d7f9b` 2024-01-01 base
+- L17-19 `c945b10` 2024-01-01 🐞 fix: crash on null buffer in decode_msg
+- L20-22 `d4d7f9b` 2024-01-01 base
+⚠️ 1 earlier fix touched these lines: make sure the change does not undo it (`c945b10`).
+```
+
+---
+
+## 30. `get_change_hotspots`
+
+**What it does:** ranks C/C++ files by how much they deserve review attention: commits, bug-fix commits and changed
+lines (git history up to HEAD, counted back from the HEAD commit date so the answer does not change with the calendar),
+and calls coming in from other files (code graph).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `path_glob` | string | `""` | Restrict to matching files. |
+| `since_days` | integer | `365` | How far back to look. |
+
+Score = commits × (1 + 2 × fix commits) × (1 + ⌊log₂(1 + calls from other files)⌋).
+
+---
+
+## 31. `find_log_origin`
+
+**What it does:** from a log line, crash report or incident message to the code that printed it. It removes the
+variable parts (numbers, hex, GUIDs, quoted values, IP addresses, paths), searches the remaining literal fragments
+inside C/C++ string literals only, and ranks format strings by how many fragments they contain, with their function
+and callers.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `text` | string | required | The log line as it appears in the log. |
+
+```text
+### 🔍 LOG ORIGIN: "decode_msg: unknown message type 'Z' from peer 10.0.0.7"
+Searched 2 literal fragments: "decode_msg: unknown message type", "from peer".
+1. `src/net/proto.cpp:26` in `decode_msg` — matches 2 of 2 fragments
+   `log_error("decode_msg: unknown message type '%c' from peer %s", in[0], "?");`
+   - Called from: `TEST(Proto,RoundTrip)` (`tests/test_proto.cpp:9`)
+```
+
+---
+
+## 32. `verify_finding`
+
+**What it does:** re-checks one finding before it goes into a review, or after a fix. It re-runs the tool call that
+produced the finding on the current code and says whether it is ✅ reproduced, ↪️ moved (with its new ID) or ❎ no longer
+reported; shows the code around it (following the line if it moved); and lists what would prove the finding wrong.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `finding_id` | string | required | An ID such as `F7a0cc5`. |
+
+Findings are stored in `.staticsight/findings.json` (the latest 2000) with the tool call that produced them, so an ID
+from an earlier session can be verified later.
+
+```text
+### 🔎 VERIFY `F7a0cc5`: leak_path
+**Claim** (medium): return at line 13 leaves `buffer` (L11) unreleased
+**Where:** `src/router.cpp:13` in `Router::process_packet`
+**Status:** ✅ Reproduced: re-running `get_branch_skeleton(file_path="src/router.cpp", symbol="process_packet")` reports the same finding.
+…
+**Before reporting it, rule out:**
+- The resource is released by an RAII owner, a `goto cleanup`, or a callee that takes ownership.
+- The allocation failed on this path (null), so there is nothing to release.
+```
+
+---
+
+## 33. `get_more`
+
+**What it does:** returns the next page (40 items) of a list another tool truncated. Truncated lists end with
+`Next: get_more("P1a2b3c")`; each page ends with a new token while items remain. Table rows keep their table header.
+Pages are stored in `.staticsight/pages/`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `token` | string | required | The token from the truncation note. |
+
+---
+
+## Prompts
+
+MCP prompts are ready-made workflows the user can pick in the client (for example as slash commands). Each takes
+optional arguments.
+
+| Prompt | Arguments | For |
+|---|---|---|
+| `review_cpp_changes` | `focus` | The review workflow, a checklist of small but costly C++ issues, and the reporting format (Blocker/Major/Minor/Nit, evidence with finding IDs, fix, verdict). |
+| `investigate_hang` | `symptom` | A hang, deadlock or stall: lock graph, lock-order cycles, locks held across blocking calls, the threads involved. |
+| `investigate_incident` | `log_text` | From a log line to the root cause: origin of the message, how input reaches it, recent changes, where else the bug is. |
+| `plan_refactor` | `symbol`, `change` | A step-by-step refactor plan that keeps the code working, before any edit. |
+| `onboard_me` | `area` | A guide to an unfamiliar area: main types, entry points and flow, threads and locks, fragile spots, tests. |
+
+The prompt texts are in [`shared/prompts/`](../shared/prompts/). The review guidance is also in the Copilot skill
+`.github/skills/staticsight-cpp-review/SKILL.md`.
 
 ## Engines at a glance
 
 | Engine | Used by | Required? |
 |---|---|---|
-| Universal Ctags (JSON) | scopes, skeletons, diff scopes, enrichment everywhere | yes |
-| ripgrep | struct risks, blast radius, mutations, lock order, fallbacks | yes |
-| git | diff scopes, review, ✏️ markers | for diff features |
-| cppcheck | static audit | for `run_file_static_audit` |
-| GNU Global | callers, definitions (precise) | optional (ripgrep fallback) |
+| Universal Ctags (JSON) | scopes, skeletons, diff scopes, the code graph, enrichment everywhere | yes |
+| ripgrep | struct risks, blast radius, mutations, lock order, log origin, fallbacks | yes |
+| git | diff scopes, review, ✏️ markers, line history, hotspots, counterparts, edit checks | for diff and history features |
+| cppcheck | static audit, edit checks | for `run_file_static_audit` |
+| GNU Global | callers, definitions (precise); fallback while the code graph builds | optional (ripgrep fallback) |
+| Code graph (SQLite, built from ctags + source) | impact, call paths, entry paths, hierarchy, queries, completeness, tests, context packs | built automatically |
 
 ---
 
 <!-- nav:bottom -->
-| ⬅️ [Learn and experiment](semantic-search/experiments.md) | 📚 [Documentation](README.md) | [Raw commands](COMMANDS.md) ➡️ |
+| ⬅️ [Learn and experiment](semantic-search/experiments.md) | 📚 [Documentation](README.md) | [The code graph](code-graph.md) ➡️ |
 |:---|:---:|---:|
 <!-- /nav:bottom -->

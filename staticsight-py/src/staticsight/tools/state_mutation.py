@@ -13,6 +13,7 @@ from ..core.paths import read_lines, resolve_in_workspace
 from ..engines.rg import rg_search
 from ..core.errors import InvalidArgument, StaticSightError
 from .graph_gtags import normalize_symbol
+from .findings import record
 
 _LOCK_DECL = re.compile(r"\b(lock_guard|unique_lock|scoped_lock|shared_lock)\b")
 _ATOMIC_DECL = re.compile(r"\bstd::atomic\b|\batomic\s*<|\b_Atomic\b|\batomic_\w+\b")
@@ -110,7 +111,9 @@ async def state_mutations_report(cfg: Config, symbol: str, file_path: str = "") 
                     kind, ln = locks[-1]
                     sync = f"🔒 {kind} (L{ln})"
                     if access in ("write", "mutating call") and kind == "shared_lock":
-                        sync += " ⚠️ shared lock for a write"
+                        fid = record("shared_lock_write", "medium", path, m.line, sym,
+                                     f"`{sym}` is written under a shared (reader) lock", function=fn.qualified)
+                        sync += f" ⚠️ shared lock for a write `{fid}`"
                 else:
                     sync = "❌ BARE"
             rows.append({"path": path, "line": m.line, "fn": fn.qualified if fn else "(file scope)", "access": access,
@@ -133,6 +136,11 @@ async def state_mutations_report(cfg: Config, symbol: str, file_path: str = "") 
     if atomic_decl:
         out.append("⚛️ Declared atomic: individual operations are race-free, but check compound read-modify-write sequences.")
     elif locked and bare:
+        for r in bare:
+            fid = record("unlocked_access", "medium", r["path"], r["line"], sym,
+                         f"`{sym}` {r['access']} without a lock, but it is locked in {len(locked)} other place(s)",
+                         function=r["fn"])
+            r["sync"] += f" `{fid}`"
         where = ", ".join(f"`{r['path']}:{r['line']}` ({r['fn']}, {r['access']})" for r in bare[:5])
         out.append(
             f"⚠️ **Inconsistent locking:** accessed under a lock in {len(locked)} place(s) but without one in {len(bare)}: {where}. "
@@ -144,7 +152,7 @@ async def state_mutations_report(cfg: Config, symbol: str, file_path: str = "") 
     body = [
         f"| `{r['path']}:{r['line']}` | `{r['fn']}` | {r['access']} | {r['sync']} | `{_cell(r['text'])}` |" for r in rows
     ]
-    out += table + md.truncate_list(body, cfg.max_results, "accesses", "Pass file_path to focus on one file.")
+    out += table + md.truncate_list(body, cfg.max_results, "accesses", "Pass file_path to focus on one file.", header=table[1:])
     out.append("\n_Heuristic: lock scope inferred from RAII guards/.lock() inside the enclosing function; locks held by callers are not visible._")
     return "\n".join(out)
 

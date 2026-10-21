@@ -10,7 +10,7 @@ import pytest
 from staticsight import platform as plat
 from staticsight.core.errors import ToolTimeout
 from staticsight.core.paths import decode_source, matches_glob, read_lines
-from staticsight.engines.gnu_global import parse_x_output
+from staticsight.engines.gnu_global import parse_ctags_output, parse_x_output
 from staticsight.engines.rg import RgResult  # noqa: F401  (import check)
 from staticsight.platform.posix import PosixPlatform
 from staticsight.platform.windows import WindowsPlatform
@@ -87,6 +87,15 @@ def test_global_output_with_backslash_paths():
     finally:
         plat.use(None)
     assert hits[0].path == "src/net/listener.cpp" and hits[0].line == 9
+
+
+def test_global_ctags_output_preserves_spaces_and_windows_separators():
+    plat.use(WindowsPlatform())
+    try:
+        hits = parse_ctags_output("process_packet\tsrc dir\\file name.cpp\t17\r\n")
+    finally:
+        plat.use(None)
+    assert hits == [("src dir/file name.cpp", 17)]
 
 
 def test_decode_source_boms(tmp_path):

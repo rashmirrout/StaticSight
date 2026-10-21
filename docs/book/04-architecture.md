@@ -34,15 +34,18 @@ Inside each implementation, code is arranged in layers. Each layer may only use 
 ```mermaid
 flowchart TB
     subgraph Entry
-        E1[server: MCP registration,<br/>safe_tool wrapper]
+        E1[server: MCP registration, prompts,<br/>call_tool wrapper: budget, findings, pages]
         E2[cli / toolrun:<br/>command line]
         E3[doctor]
     end
     subgraph tools
-        T[16 tools: analysis + Markdown rendering<br/>OS-independent, typed records only]
+        T[33 tools: analysis + Markdown rendering<br/>OS-independent, typed records only]
     end
     subgraph semantic
         S[files · chunker · index · search]
+    end
+    subgraph graph
+        G[store: build, drift, refresh<br/>query: resolve calls, hierarchy, entry points]
     end
     subgraph engines
         EN[ctags · rg · git · gnu_global · cppcheck<br/>embedder · vector_store · capabilities]
@@ -54,8 +57,10 @@ flowchart TB
     E2 --> T
     E3 --> EN
     T --> S
+    T --> G
     T --> EN
     S --> EN
+    G --> EN
     EN --> P
 ```
 
@@ -71,10 +76,21 @@ versions, and whether ctags supports JSON.
 **semantic/** implements semantic search on top of the engines: which files to index, how to cut them into chunks, the
 SQLite index with its freshness policy, and ranking.
 
-**tools/** holds the 16 tools. They combine records from engines, apply the analysis (enclosing scopes, lock
-inference, leak paths, classification of call sites) and render Markdown. They never start processes or look at the OS.
+**graph/** is the [code graph](../code-graph.md): a SQLite database of definitions, calls and includes, built per file
+from ctags and the comment-stripped source, checked against the files on every use and refreshed incrementally.
+`query` resolves a call by name, class and qualifier at question time, which is why a single file can be re-parsed
+without touching the rest.
 
-**Entry points** connect the tools to the world: the MCP server, the command line and the doctor.
+**tools/** holds the 33 tools. They combine records from engines and the graph, apply the analysis (enclosing scopes,
+lock inference, leak paths, classification of call sites, call chains) and render Markdown. They never start processes
+or look at the OS. `findings` gives every reported risk a stable ID (a hash of kind, file, line and symbol) and
+collects them per call.
+
+**Entry points** connect the tools to the world: the MCP server, the command line and the doctor. One wrapper runs
+every tool call, whichever entry point it comes from: it turns failures into Markdown cards, applies the output budget,
+stores the items cut from long lists (for `get_more`) and the findings (for `verify_finding`) in `.staticsight/`, and,
+over MCP, adds the findings as structured content. `serve` keeps one HTTP server running so command-line calls reuse
+warm indexes.
 
 ## One contract, two implementations
 
@@ -103,21 +119,22 @@ flowchart TD
     D -->|yes| F[--repo PATH → WORKSPACE_ROOT]
     F --> G{command}
     G -->|none, stdio, sse, streamable-http| S[MCP server]
+    G -->|serve| SV[local HTTP server<br/>for tool --server]
     G -->|doctor| DR[doctor report]
     G -->|index, search, similar, model| CL[semantic CLI]
-    G -->|tool NAME| TR[tool runner:<br/>same function + safe_tool as MCP]
+    G -->|tool NAME| TR[tool runner:<br/>same function + wrapper as MCP]
 ```
 
 `staticsight.py` uses only the standard library, so it can always explain what is missing. It then adds
 `staticsight-py/src` to Python's import path and hands over to `staticsight.server.main`.
 
 When the MCP server starts, it:
-1. reads `tool-spec.json` and registers each tool with its description and annotations, wrapped in `safe_tool`;
-2. registers the `review_cpp_changes` prompt;
-3. after the handshake, starts GNU Global indexing in the background.
+1. reads `tool-spec.json` and registers each tool with its description and annotations, wrapped in the tool wrapper;
+2. registers the five prompts listed in the same file, with their arguments;
+3. after the handshake, starts GNU Global indexing in the background, and the first code graph build if there is none.
 
-`safe_tool` is the single place that enforces two principles for every tool: errors become Markdown cards (never
-exceptions), and output is cut to the budget.
+The wrapper is the single place that enforces the principles for every tool: errors become Markdown cards (never
+exceptions), output is cut to the budget, findings get stored for `verify_finding`, and cut list items for `get_more`.
 
 ## Choosing the workspace
 
@@ -135,14 +152,15 @@ All file arguments are resolved against the workspace and must stay inside it.
 flowchart LR
     subgraph repo["your repository"]
         SRC[source files<br/>read only]
-        D[".staticsight/<br/>.gitignore (*)<br/>GTAGS GRTAGS GPATH<br/>semantic.db, semantic.lock"]
+        D[".staticsight/<br/>.gitignore (*)<br/>GTAGS GRTAGS GPATH<br/>semantic.db, graph.db<br/>findings.json, pages/<br/>cppcheck-project.cfg, edit_snapshot.json"]
     end
     subgraph user["per-user cache"]
         MOD["models/jina-code/&lt;revision&gt;/"]
     end
 ```
 
-- **Per repository, in `<repo>/.staticsight/`:** the GNU Global database and the semantic index. The folder's own
+- **Per repository, in `<repo>/.staticsight/`:** the GNU Global database, the semantic index, the code graph, stored
+  findings and result pages, the generated cppcheck library and the `check_my_edit` snapshot. The folder's own
   `.gitignore` contains `*`, so git ignores everything in it (including the `.gitignore` itself) without editing your
   `.gitignore`. Each clone or worktree has its own indexes, which matches how branches differ. Deleting the folder is safe.
 - **Per user:** the embedding model, downloaded once and shared by all repositories and both implementations
@@ -159,7 +177,7 @@ flowchart LR
 - **The shared contract makes two implementations cheap to keep in sync.** A change to a description is made once. A
   change to behaviour is checked by the goldens in both languages.
 - **The command line reuses the MCP path.** `staticsight tool …` calls the same function through the same
-  `safe_tool`, so what you see in a terminal is exactly what the agent receives.
+  wrapper, so what you see in a terminal is exactly what the agent receives.
 
 ---
 

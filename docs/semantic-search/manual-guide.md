@@ -8,7 +8,7 @@ This guide shows how to use semantic search yourself, without an AI agent. Every
 StaticSight test repository (`shared/fixtures/make_fixture.py /tmp/cpp-sample`); only timings differ on your machine.
 
 <!-- nav:toc -->
-**On this page:** [1. Install the packages (once per machine)](#1-install-the-packages-once-per-machine) · [2. Check the setup](#2-check-the-setup) · [3. Download the model (once per user)](#3-download-the-model-once-per-user) · [4. Build the index](#4-build-the-index) · [5. Search](#5-search) · [6. Find similar code](#6-find-similar-code) · [7. Keep it fresh](#7-keep-it-fresh) · [8. The same thing the agent sees](#8-the-same-thing-the-agent-sees) · [9. TypeScript](#9-typescript) · [Troubleshooting](#troubleshooting)
+**On this page:** [1. Install the packages (once per machine)](#1-install-the-packages-once-per-machine) · [2. Check the setup](#2-check-the-setup) · [3. Choose and download a model (once per user)](#3-choose-and-download-a-model-once-per-user) · [4. Build the index](#4-build-the-index) · [5. Search](#5-search) · [6. Find similar code](#6-find-similar-code) · [7. Keep it fresh](#7-keep-it-fresh) · [8. The same thing the agent sees](#8-the-same-thing-the-agent-sees) · [9. TypeScript](#9-typescript) · [Troubleshooting](#troubleshooting)
 <!-- /nav:toc -->
 
 The commands assume the `staticsight` alias from [Getting started](../getting-started.md#5-make-a-short-command):
@@ -47,22 +47,125 @@ Semantic search (optional):
   OK   model     jina-code@516f4baf13dec4ddddda8631e019b5737c8bc250 (/root/.cache/staticsight/models/jina-code/516f4baf13dec4ddddda8631e019b5737c8bc250)
 ```
 
-## 3. Download the model (once per user)
+## 3. Choose and download a model (once per user)
 
-The model (`jinaai/jina-embeddings-v2-base-code`, about 165 MB) is downloaded once, verified with sha256, and shared
-by every repository. The first search downloads it automatically; doing it up front avoids waiting later.
+The default model (`jinaai/jina-embeddings-v2-base-code`, about 165 MB) remains the recommended code-search model. Two
+optional, smaller general-purpose models are built in:
+
+| Name | Download | Vector | Input cap | Best for |
+|---|---:|---:|---:|---|
+| `jina-code` (default) | ~165 MB | 768 | 512 | code-aware search across many programming languages |
+| `minilm-fast` | ~91 MB | 384 | 256 | lowest memory/startup cost; broad English + some CodeSearchNet training |
+| `bge-small-en` | ~134 MB | 384 | 512 | compact general English retrieval; not code-specialized |
+
+List the exact pinned revisions and licenses:
+
+```bash
+staticsight model list
+```
+
+Download the default:
 
 ```bash
 staticsight model download
 staticsight model status
 ```
 
+No environment variable is needed. A bare `model download` always downloads the built-in default, `jina-code`—even
+if the current shell happens to have `STATICSIGHT_EMBED_MODEL` set for another repository.
+
 ```text
 model jina-code@516f4baf13dec4ddddda8631e019b5737c8bc250 in /root/.cache/staticsight/models/jina-code/516f4baf13dec4ddddda8631e019b5737c8bc250: OK (verified)
 ```
 
+Or download one option without changing or activating it:
+
+```text
+staticsight model download --model minilm-fast
+staticsight model status --model minilm-fast
+```
+
+`--model` applies to that model command only. **For every non-default model, setting
+`STATICSIGHT_EMBED_MODEL=NAME` is required** for indexing, search and MCP; downloading alone is not selection. Rebuild
+the semantic index after setting it:
+
+```text
+export STATICSIGHT_EMBED_MODEL=minilm-fast                       # Linux/macOS
+$env:STATICSIGHT_EMBED_MODEL = "minilm-fast"                    # Windows PowerShell
+staticsight index build --full
+```
+
+In an MCP configuration:
+
+```json
+{
+  "env": {
+    "STATICSIGHT_EMBED_MODEL": "minilm-fast"
+  }
+}
+```
+
+Without that environment variable, StaticSight continues to use `jina-code`. Changing models requires a full semantic
+rebuild: vectors made by two embedding models are not comparable.
+
 Offline machine? Run `model download` on a connected machine, copy the `models/` folder into the same place, or point
 `STATICSIGHT_EMBED_MODEL_DIR` at it. `STATICSIGHT_SEMANTIC_ALLOW_DOWNLOAD=0` forbids downloads entirely.
+
+### Add a model once through JSON
+
+Set `STATICSIGHT_MODEL_MANIFEST` to a user-maintained JSON file. It adds names to `model list`; built-in names cannot
+be replaced.
+
+```json
+{
+  "models": {
+    "my-code-model": {
+      "description": "My pinned sentence-transformers ONNX export.",
+      "repo": "organization/model-name",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "license": "Apache-2.0",
+      "dims": 768,
+      "max_tokens": 512,
+      "pooling": "mean",
+      "onnx": "onnx/model.onnx",
+      "files": {
+        "onnx/model.onnx": "<64-character sha256>",
+        "tokenizer.json": "<64-character sha256>",
+        "tokenizer_config.json": "<64-character sha256>",
+        "1_Pooling/config.json": "<64-character sha256>"
+      }
+    }
+  }
+}
+```
+
+```text
+export STATICSIGHT_MODEL_MANIFEST=~/.config/staticsight/models.json
+staticsight model list
+staticsight model download --model my-code-model
+```
+
+The external model also requires `STATICSIGHT_EMBED_MODEL=my-code-model` in the terminal or MCP configuration before
+`index build --full`.
+
+The revision must be an immutable 40-character Hugging Face commit SHA. Every path must be relative and every file is
+downloaded atomically and SHA-256 verified. The ONNX encoder must accept `input_ids`, `attention_mask` and optionally
+`token_type_ids`, and return token-level hidden states; pooling must be `mean` or `cls`.
+
+### Microsoft Foundry
+
+As of **October 21, 2026**, Microsoft Foundry exposes embedding models through hosted Azure OpenAI deployments,
+managed compute and Foundry Local/runtime assets. That is not the same contract as StaticSight's pinned
+sentence-transformers ONNX directory. Catalog entries may be custom vLLM assets or remote APIs and do not guarantee
+`tokenizer.json` plus a compatible ONNX encoder.
+
+For example, Foundry lists Qwen3 embedding models, but the inspected 0.6B Foundry Local catalog asset is a custom model
+with a vLLM inference environment—not a directly usable StaticSight ONNX bundle. Therefore StaticSight does not add
+Foundry catalog names to `model list`.
+
+A future opt-in provider could call a **local Foundry Local endpoint** or a **remote Foundry embedding deployment**.
+Remote mode would send source chunks and queries to Azure, changing StaticSight's current local/private security
+boundary, and must be a separate explicit backend.
 
 ## 4. Build the index
 

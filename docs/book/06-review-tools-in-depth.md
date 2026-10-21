@@ -82,7 +82,8 @@ cppcheck's `memleak` as the stronger evidence.
 **Question:** where is this function called, and do callers use its result?
 
 **Method:**
-1. `global -xr` gives every reference. Without GNU Global: ripgrep for `name(` and `&name`.
+1. `global --result=ctags -r` gives every reference as a tab-delimited path and line; StaticSight reads the source
+   line itself. Without GNU Global: ripgrep for `name(` and `&name`.
 2. Remove noise: hits in comments or strings, the function's own declaration and definition, and variables or
    parameters with the same name.
 3. Find each caller function with the enclosing-scope lookup.
@@ -99,7 +100,7 @@ name are not found. The output says "may be unused, called via macro, or only re
 
 **Question:** where is it defined, and what does it require from callers?
 
-**Method:** `global -xd` for definitions, enriched with ctags kind and signature; for data members (which GNU Global
+**Method:** `global --result=ctags -d` for definitions, enriched with ctags kind and signature; for data members (which GNU Global
 does not index as definitions) ripgrep finds candidate files and ctags finds the member. The contract tool then reads:
 - **qualifiers** from the signature and the line (`const`, `noexcept`, `virtual`, `override`, `[[nodiscard]]`, `= delete`, …);
 - the **doc comment** directly above the declaration or definition (`/** */`, `///`, `//!`, `//` blocks, trailing `///<`);
@@ -211,9 +212,67 @@ Windows code (Chapter 8). If headers cannot be parsed because of an unknown macr
 paths and the macro is named in the output, so you can pass a definition. Findings are mapped onto the diff and sorted
 by severity; findings located inside headers are counted but omitted.
 
+**Your own allocators.** cppcheck knows `malloc`/`free` and, in MSVC mode, the Win32 API, but not
+`pool_alloc`/`pool_release`. Contracts often say it in a comment ("MUST be paired with release_buffer()"). StaticSight
+reads those pairs and writes them as a cppcheck library in `.staticsight/cppcheck-project.cfg`, so cppcheck reports
+`Memory leak: ring` for the project's own allocator too, on the exact early return.
+
 **Limits:** cppcheck sees one file at a time with partial headers, so it misses bugs that need whole-program knowledge
 and may report a few false positives in macro-heavy code. Its findings on changed lines are nevertheless the strongest
 evidence in a review.
+
+## The code graph: reach instead of names
+
+**Question:** what does a change affect *beyond* its direct callers, and who can reach it?
+
+**Method:** a SQLite graph of definitions, calls and includes, one file at a time from ctags and the blanked source
+(see [The code graph](../code-graph.md)). A call is stored by name with what the source says about it: plain,
+`obj.f()`, `C::f()`, an address taken, or a function handed to a thread or callback API. When a question comes, the
+call is resolved: a qualified call only reaches that class or namespace, an unqualified call inside a member of `C`
+prefers `C`'s own method, a member call never reaches a free function. On that graph:
+
+- `get_impact` walks callers (or callees) several levels deep and tags 🚪 entry points, 🧵 threads and callbacks and
+  🧪 tests; virtual methods bring their overrides.
+- `get_call_paths` finds the shortest chains between two functions; `find_entry_paths` the chains from every entry
+  point, thread or callback.
+- `get_type_hierarchy` draws bases and derived classes from ctags' `inherits` field and lists each virtual method with
+  its overrides (ctags' `properties`: `virtual`, `pure`, `override`).
+- `query_graph` answers the rest with a small language: `callers*2 of X in src/*`, `members of C`, `entry-points`.
+
+**Limits:** `obj.f()` may reach any `f` (the type of `obj` is unknown), and function pointers stored in tables are not
+followed. The answers say so. The graph is re-parsed for changed files before every answer, so it is never stale.
+
+## Completeness: what should have changed too
+
+**Question:** is the change finished?
+
+**Method:** `find_switch_coverage` compares each `switch` over an enum (found through the enum's values in `case`
+labels) with the enum's values from ctags, and says whether a `default:` catches the missing ones.
+`find_counterparts` finds naming pairs (about 35: encode/decode, open/close, register/unregister, …), platform twins (the
+same function in a `_win` and a `_posix` file, or twice in one file) and files that change together in git history,
+then flags those the diff did not touch. `find_related_tests` walks callers up to test functions.
+
+**Limits:** twins with unrelated names are left to `find_similar_code`; a switch over an `int` holding enum values
+is not recognised.
+
+## History: was this fixed before?
+
+**Question:** does this change undo an earlier fix? Where is the code fragile?
+
+**Method:** `get_line_history` uses `git blame -w -M -C` per line and `git log -L` for every commit that touched the
+range, marking subjects that say fix, bug, revert, crash, leak, race or deadlock. `get_change_hotspots` combines
+commits, fix commits and changed lines (counted back from the HEAD commit, so the answer does not drift with the
+calendar) with calls coming in from other files.
+
+## Coding and trust: plan, check, verify
+
+**Question:** how does the agent write code that survives review, and how sure is each finding?
+
+**Method:** `plan_change` turns the graph, the contract and the history into an ordered checklist before an edit.
+`check_my_edit` runs the fast checks (exit-path leaks, cppcheck on changed lines, stale callers, missing switch cases,
+forgotten twins) on what changed since its previous call. Every finding in every tool has an ID; `verify_finding`
+re-runs the call that produced it on the current code and lists what would disprove it. Long lists end with a
+`get_more` token instead of silently dropping items.
 
 ## `review_changes`: the bundle
 
@@ -223,8 +282,11 @@ evidence in a review.
 cppcheck on up to six changed source files (changed lines only), skeletons of changed functions (modified before new;
 functions with no branches listed on one line), callers of modified functions and changed declarations, layout risks
 of structs whose data members changed, blast radius of changed headers, locking of class members used by changed
-functions (shown only when inconsistent), functions newly called by added lines, and a checklist generated from what
-was found.
+functions (shown only when inconsistent), lock order for changed functions that take locks, functions newly called
+by added lines, similar code elsewhere, the reach of changed functions (entry points, threads, tests), completeness
+(switch gaps, unchanged twins), earlier fixes on the changed lines, and a checklist generated from what was found. When
+the sections do not fit, the longest ones are shortened first, so every section keeps its heading and first findings,
+and the checklist is always complete.
 
 **Design choice:** it is a *starting point*. It shows enough of everything to decide where to look, and suggests the
 exact follow-up calls. Depth comes from the individual tools.
@@ -241,6 +303,10 @@ exact follow-up calls. Depth comes from the individual tools.
 | 📥 / 📤 | resource acquired / released |
 | ❌ BARE | access with no lock and no atomic |
 | 🆕 / 🗑️ / 🔁 / 🧱 | new / removed / signature changed / layout changed |
+| 🚪 / 🧵 / 🧪 | program entry point / thread or callback / test |
+| 🐞 | a bug-fix or revert commit |
+| `F7a0cc5` | a finding ID, for `verify_finding` |
+| ❌ / ⚠️ / ℹ️ in finding lists | strong / medium / weak confidence |
 
 ---
 

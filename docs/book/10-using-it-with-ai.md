@@ -15,7 +15,7 @@ An agent decides which tool to call from text it has in its context. StaticSight
 flowchart TB
     A["Tool descriptions<br/>(always: from tools/list)"] --> Agent
     B["Server instructions<br/>(always: from initialize)"] --> Agent
-    C["MCP prompt review_cpp_changes<br/>(when you pick it)"] --> Agent
+    C["MCP prompts: review, hang, incident,<br/>refactor, onboarding (when you pick one)"] --> Agent
     D["Copilot skill + instruction<br/>(when the task matches / for C/C++ files)"] --> Agent
     Agent --> T[Tool calls]
 ```
@@ -26,12 +26,17 @@ struct/class gains, loses, reorders or resizes a member", "Use when you know WHA
 called". Good descriptions are the main reason agents pick the right tool without being told.
 
 **Server instructions** are a short briefing sent in the handshake: what StaticSight is, to start with
-`review_changes`, that results carry `file:line` references to cite, and that results marked heuristic must be verified.
+`review_changes`, to plan edits with `plan_change` and check them with `check_my_edit`, to verify findings by ID before
+reporting them, that long lists continue with `get_more`, that results carry `file:line` references to cite, and that
+results marked heuristic must be verified.
 
 **The MCP prompt** `review_cpp_changes(focus?)` is a ready-made review workflow for clients that support MCP prompts.
 It walks through the tools in order, lists small but costly C++ issues to check (resource pairing, lock scope, ignored
 errors, ABI and wire layout, macros, integer width, object lifetime), and defines the report format. `focus` adds
-"Pay special attention to: …".
+"Pay special attention to: …". Four more prompts cover the other big jobs: `investigate_hang(symptom?)` (lock graph,
+lock-order cycles, blocking calls under locks, the threads involved), `investigate_incident(log_text?)` (from a log line
+to the root cause), `plan_refactor(symbol?, change?)` (every place to change before editing, then an edit-check loop)
+and `onboard_me(area?)` (a guide to an unfamiliar area).
 
 **The Copilot skill and instruction** in `.github/`:
 - `skills/staticsight-cpp-review/SKILL.md` is loaded when a task matches its description (reviewing C/C++ changes,
@@ -68,15 +73,26 @@ You don't need to name tools. Some requests and what an agent typically calls:
 | "Where do we retry failed network calls?" | `semantic_search("retry failed network calls")` |
 | "Is there code elsewhere that looks like `wal_append`?" | `find_similar_code("src/storage/wal.cpp", 5)` |
 | "Caller results look incomplete. Why?" | `get_index_status` |
-| "I just pulled. Refresh the search index." | `refresh_semantic_index()` |
+| "I just pulled. Refresh the search index." | `refresh_semantic_index()` (the code graph refreshes itself) |
+| "What does changing `process_packet` affect, all the way up?" | `get_impact("process_packet")` |
+| "Can a network thread reach this `memcpy`?" | `find_entry_paths(...)`, `get_call_paths(...)` |
+| "Tell me everything about `Router::process_packet`." | `get_context_pack("Router::process_packet")` |
+| "Add a timeout parameter to `decode_msg`." | `plan_change("decode_msg", "add a timeout parameter")`, edits, `check_my_edit()` after each |
+| "I added `Ping` to `MsgType`. Did I miss anything?" | `find_switch_coverage("MsgType")`, `find_counterparts(...)` |
+| "Was this line fixed before?" | `get_line_history(file, start, end)` |
+| "Where does this log line come from: `decode_msg: unknown message type 'Q'`?" | `find_log_origin(...)` |
+| "Is finding `F7a0cc5` real?" | `verify_finding("F7a0cc5")` |
 
 ## Getting better reviews
 
 - **Ask for evidence.** "Cite file:line for every finding" makes the agent lean on tool output rather than memory.
 - **Ask for a verdict.** "End with blockers and a merge verdict" makes the result actionable.
 - **Name the risk you care about.** "Focus on locking and error codes" (or the prompt's `focus`) steers the drill-downs.
-- **Let it verify heuristics.** "Before reporting a race, check the callers" turns a ⚠️ into a confirmed finding or a
-  dismissed one.
+- **Let it verify heuristics.** "Verify every finding before reporting it" makes the agent call `verify_finding` on each
+  ID, which re-runs the check on the current code and lists what would disprove it. A ⚠️ becomes a confirmed finding or
+  a dismissed one.
+- **Let it check its own edits.** "Run check_my_edit after every change" catches the leak, the stale caller and the
+  forgotten Windows twin before you see the diff.
 - **Keep the index fresh.** After a pull or a branch switch, "refresh the index first" avoids stale semantic results
   (small changes are refreshed automatically).
 

@@ -6,7 +6,7 @@ Paths: 3 returns, 0 throws (2 early exits), 0 loops; ⚠️ 1 potential leak pat
 ├── [L6] IF (h == INVALID_HANDLE_VALUE)
 │   ├── [L7] 🛑 RETURN E_FAIL
 ├── [L9] IF (!GetFileSize(h, size))
-│   ├── [L10] 🛑 RETURN E_FAIL ⚠️ early exit; `h` (L5) not released on this path
+│   ├── [L10] 🛑 RETURN E_FAIL ⚠️ early exit; `h` (L5) not released on this path [F8d0e1f]
 ├── [L12] 📤 RELEASE `h` — CloseHandle(h);
 ├── [L13] ↩ RETURN S_OK
 ```

@@ -13,6 +13,7 @@ from ..core.locks import LOCK_TRIGGERS, RECURSIVE_KINDS, LockWalker, line_events
 from ..core.paths import matches_glob, read_lines
 from ..engines.ctags import FUNCTION_KINDS, try_ctags_for_files
 from ..engines.rg import rg_search
+from .findings import record
 
 _BLOCKING = re.compile(
     r"\b(send|sendto|sendmsg|recv|recvfrom|recvmsg|connect|accept|select|poll|epoll_wait|fopen|fread|fwrite|fflush|"
@@ -216,9 +217,15 @@ async def lock_order_report(cfg: Config, path_glob: str = "", symbol: str = "",
         for i, c in enumerate(cycles, 1):
             ring = " → ".join(f"`{k}`" for k in c + [c[0]])
             lines = [f"{i}. {ring}"]
+            first: Edge | None = None
             for a, b in zip(c, c[1:] + [c[0]]):
                 ev = sorted(pairs[(a, b)], key=lambda e: (e.path, e.line_first, e.line_second, e.via))
+                first = first or ev[0]
                 lines.append(f"   - {_ev(ev[0])}" + (f" (+{len(ev) - 1} more)" if len(ev) > 1 else ""))
+            if first is not None:
+                fid = record("lock_cycle", "medium", first.path, first.line_second, "->".join(c),
+                             "locks taken in opposite orders: " + " -> ".join(c + [c[0]]), function=first.fn)
+                lines[0] += f" `{fid}`"
             items.append("\n".join(lines))
         out += md.truncate_list(items, cfg.max_results, "cycles", "Pass symbol or path_glob to focus.")
     else:
@@ -228,11 +235,13 @@ async def lock_order_report(cfg: Config, path_glob: str = "", symbol: str = "",
         out.append("\n⚠️ **Same lock taken twice** (self-deadlock for non-recursive mutexes):")
         out += md.truncate_list(
             [f"- `{p}:{n}` in `{fn}`: `{k}` is already held" + (f", and `{via}()` takes it again" if via else "")
+             + f" `{record('lock_twice', 'medium', p, n, k, f'{k} taken while already held', function=fn)}`"
              for p, fn, n, k, via in sre], cfg.max_results, "sites")
     blk = sorted({(p, fn, n, call, tuple(sorted(set(ks)))) for p, fn, n, call, ks in blocking if keep(ks)})
     if blk:
         out.append("\n⏳ **Locks held across blocking calls** (latency, and deadlock if the other side needs the lock):")
         out += md.truncate_list([f"- `{p}:{n}` in `{fn}`: `{call}()` while holding " + ", ".join(f"`{k}`" for k in ks)
+                                 + f" `{record('lock_blocking', 'weak', p, n, call, f'{call}() called while holding ' + ', '.join(ks), function=fn)}`"
                                  for p, fn, n, call, ks in blk], cfg.max_results, "sites")
     order = sorted(((a, b), ev) for (a, b), ev in pairs.items() if keep([a, b]))
     if order and not only_keys:

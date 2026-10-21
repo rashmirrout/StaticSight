@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { clearCache } from "../src/engines/ctags.js";
 import { getIndexer, resetIndexers } from "../src/indexer.js";
 import { getSemanticIndex, resetSemanticIndexes } from "../src/semantic/index.js";
+import { getGraph, resetGraphs } from "../src/graph/store.js";
 
 export const SHARED = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "shared");
 const DATA = join(SHARED, "fixtures", "cpp-sample");
@@ -65,9 +66,11 @@ export async function setupWorkspace(): Promise<string> {
   process.env.STATICSIGHT_EMBED_MODEL = "test-hash"; // deterministic, no download; identical to the Python suite
   resetIndexers();
   resetSemanticIndexes();
+  resetGraphs();
   clearCache();
   await getIndexer().start();
   if (getIndexer().state !== "ready") throw new Error(`index not ready: ${JSON.stringify(getIndexer().status())}`);
+  await getGraph().refresh(true);
   await getSemanticIndex().refresh();
   return root;
 }

@@ -1,5 +1,14 @@
 // Markdown helpers shared by all tools. Lengths are counted in code points to match the Python implementation.
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export const LINE_CLIP = 160;
+export const PAGE_SIZE = 40;
+const MAX_PAGES = 500;
+
+export const pagesDir = new AsyncLocalStorage<string | null>();
 
 export function cpLen(s: string): number {
   let n = 0;
@@ -34,12 +43,59 @@ export function errorCard(title: string, message: string, hint?: string): string
   return out;
 }
 
-export function truncateList(items: string[], limit: number, noun = "results", hint = ""): string[] {
+export function truncateList(items: string[], limit: number, noun = "results", hint = "", header: string[] = []): string[] {
   if (items.length <= limit) return [...items];
   const extra = items.length - limit;
   let note = `_…and ${extra} more ${noun}`;
-  note += hint ? `. ${hint}_` : "._";
+  note += hint ? `. ${hint}` : ".";
+  const token = savePage(noun, items.slice(limit), header);
+  note += token ? ` Next: \`get_more("${token}")\`._` : "_";
+  if (header.length) note = "\n" + note;
   return [...items.slice(0, limit), note];
+}
+
+export function pageToken(noun: string, rest: string[]): string {
+  return "P" + createHash("sha1").update(noun + "\n" + rest.join("\n")).digest("hex").slice(0, 6);
+}
+
+function prune(dir: string): void {
+  try {
+    const files = readdirSync(dir)
+      .filter((f) => /^P[0-9a-f]{6}\.json$/.test(f))
+      .map((f) => join(dir, f));
+    if (files.length <= MAX_PAGES) return;
+    files.sort((a, b) => statSync(a, { bigint: true }).mtimeNs < statSync(b, { bigint: true }).mtimeNs ? -1 : statSync(a, { bigint: true }).mtimeNs > statSync(b, { bigint: true }).mtimeNs ? 1 : 0);
+    for (const f of files.slice(0, files.length - MAX_PAGES)) unlinkSync(f);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function savePage(noun: string, rest: string[], header: string[] = []): string {
+  const dir = pagesDir.getStore();
+  if (!dir) return "";
+  const token = pageToken(noun, rest);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${token}.json`), JSON.stringify({ noun, items: rest, header }), "utf8");
+    prune(dir);
+  } catch {
+    return "";
+  }
+  return token;
+}
+
+export function loadPage(token: string): [string, string[], string[]] | null {
+  const dir = pagesDir.getStore();
+  const t = token.trim();
+  if (!dir || !/^P[0-9a-f]{6}$/.test(t)) return null;
+  try {
+    if (!existsSync(join(dir, `${t}.json`))) return null;
+    const data = JSON.parse(readFileSync(join(dir, `${t}.json`), "utf8"));
+    return [String(data.noun), (data.items ?? []).map(String), (data.header ?? []).map(String)];
+  } catch {
+    return null;
+  }
 }
 
 export function numberedCode(lines: string[], startLine: number, mark: Iterable<number> = [], width?: number): string[] {

@@ -20,7 +20,13 @@ The feature branch plants the review bugs from Chapter 1:
 - a struct that gains a field while being `memcpy`'d, `send`'d and `sizeof`'d;
 - a lock removed from a getter, and a new method writing shared state without the mutex;
 - callers that ignore a new return value;
-- two locks taken in opposite orders (one of them through a call), and a `send()` while a lock is held.
+- two locks taken in opposite orders (one of them through a call), and a `send()` while a lock is held;
+- an early return that leaks a buffer from the project's own allocator (found by cppcheck through the generated library);
+- an enum value added to one `switch` but not another, and a POSIX fix whose Windows twin was not changed.
+
+A `fix` step before the feature adds a bug-fix commit, so history tools have an earlier fix to find; a class hierarchy
+with virtual methods, a thread started from `main`, a gtest-style test and a log message give the code graph real
+work.
 
 It also contains the traps a real repository has: a Win32 `HANDLE` leak with SAL annotations, decoys in comments and
 strings (a `free(buf)` inside a comment must not count as a release), CRLF, UTF-8-with-BOM and UTF-16 files, an unstaged
@@ -71,6 +77,31 @@ print the pip command).
 - **Data folder:** `.staticsight/` is created with its `.gitignore`, `git status` stays clean, the repository is found
   from subfolders, a read-only repository falls back to the cache, and old cache indexes are migrated.
 - **Dependencies:** `requirements.txt` and `requirements-semantic.txt` match `pyproject.toml`.
+
+## Parity on real code
+
+The goldens compare both implementations on the test repository. `scripts/parity_check.py /path/to/repo` does the
+same on any repository: it samples functions, types, enums and files with a fixed seed, runs the same calls (impact,
+call and entry paths, hierarchy, queries, context packs, plans, history, hotspots, completeness, skeletons) through
+Python and TypeScript, and compares the Markdown byte for byte. On SomeCPPRepo it checks over 200 calls; it is how
+ordering differences that a 28-file fixture cannot show (ties between entry points, deleted files in history) were
+found and fixed.
+
+## Evaluating the agent, not only the tools
+
+Goldens prove the tools say the same thing every time. `scripts/eval_agent.py` asks the next question: *does the
+evidence reach the answer?* Its tasks (`shared/eval/tasks.json`) are the questions a developer asks about the planted
+bugs, each with the StaticSight calls that answer it and the evidence a correct answer must contain: the file, the line
+within ±3, and a keyword such as "leak" or "deadlock". In static mode it checks the tool output (12 of 12 tasks today).
+With `--agent-cmd` and `--baseline-cmd` it runs any agent CLI with and without StaticSight and grades the answers with
+the same rule. See [Benchmarks](../benchmarks.md#evaluate-an-agent-on-planted-bugs).
+
+## Findings you can re-check
+
+Every finding has an ID derived from what it is and where (kind, file, line, symbol), so the same bug has the same ID in
+both implementations and on every run; goldens pin them. The finding is stored with the tool call that produced it, and
+`verify_finding` re-runs that call on the current code. A finding that disappears after a fix is reported as gone, not
+remembered.
 
 ## Heuristics, labelled
 

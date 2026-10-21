@@ -1,6 +1,6 @@
 ---
 name: staticsight-cpp-review
-description: Evidence-based review of C/C++ changes and code search using the StaticSight MCP server (ctags, GNU Global, ripgrep, cppcheck, git, local semantic search). Use when asked to review C/C++ changes, a diff, a branch or a PR, when asked "what could break?", when checking the impact of changing a function, struct, header, macro or shared state, or when searching a repository by intent ("where do we …?").
+description: Evidence-based review, change planning and investigation of C/C++ code using the StaticSight MCP server (ctags, GNU Global, ripgrep, cppcheck, git, a code graph, local semantic search). Use when asked to review C/C++ changes, a diff, a branch or a PR, when asked "what could break?", when checking the impact of changing a function, struct, header, macro or shared state, before and after editing C/C++ code, when investigating a hang, crash or log message, or when searching a repository by intent ("where do we …?").
 ---
 
 # StaticSight C++ review
@@ -21,21 +21,48 @@ If no StaticSight tools are available, tell the user to configure the MCP server
    | Changed thing | Call |
    |---|---|
    | Function body | `get_branch_skeleton(file, symbol=...)`, then `get_enclosing_scope(file, line)` for the full code |
-   | Signature, return values, error codes, preconditions | `get_upstream_callers(symbol)`; check every "⚠️ result ignored" |
+   | Signature, return values, error codes, preconditions | `get_impact(symbol)` (callers several levels deep, entry points, tests); check every "⚠️ result ignored". `get_upstream_callers` for direct call sites only |
+   | Everything about one function at once | `get_context_pack("Class::fn")` or `get_context_pack("file:line")` |
+   | Can outside input or a thread reach it? | `find_entry_paths(symbol)`; `get_call_paths(from, to)` for one chain |
+   | Virtual method or base class | `get_type_hierarchy(type)`: every override must follow |
+   | Enum gained, lost or renamed a value | `find_switch_coverage(enum)`; section 12 of `review_changes` |
+   | Paired or platform code (encode/decode, `_win`/`_posix`) | `find_counterparts(symbol)`; section 12 of `review_changes` |
+   | Lines an earlier fix touched | `get_line_history(file, start, end)`; section 13 of `review_changes` |
+   | Which tests to run, or is one missing | `find_related_tests(symbol)`; section 11 of `review_changes` |
    | Functions newly called by the diff (section 9) | `get_symbol_contract(symbol)`: honour `@pre`, `@warning`, MUST/NEVER, pairing rules |
    | Struct/class/union data members | `track_struct_risks(name)` |
    | Header, macro, inline, template, constant | `get_include_blast_radius(header)` |
    | Member/global touched by concurrent code | `track_state_mutations(symbol)` |
-   | Locks added, removed or reordered; calls made while holding a lock; hangs | `track_lock_order()` (or `symbol=` one lock); section 8 of `review_changes` shows cycles for changed functions |
+   | Locks added, removed or reordered; calls made while holding a lock; hangs | `track_lock_order()` (or `symbol=` one lock); section 8 of `review_changes` shows cycles for changed functions; `get_lock_graph(path_glob)` for the module's locking design |
    | Every modified .c/.cpp | `run_file_static_audit(file, only_changed_lines=true)`; rerun with `false` for large changes |
    | Symbol location | `get_symbol_definition(symbol)` |
    | Changed function may exist in copies elsewhere | `find_similar_code(file, line)`; section 10 of `review_changes` lists near-duplicates |
    | You know what code does but not its name | `semantic_search("…intent…")`, optionally with `language`, `path_glob` or `kind` |
-3. If caller/definition results say "ripgrep fallback", call `get_index_status` and mention the lower precision.
-4. **Semantic search freshness:**
+3. **Verify before you report.** Findings carry IDs such as `F7a0cc5`. Run `verify_finding(id)` on each one you
+   report, rule out what it lists, and cite the ID. A list that ends with `Next: get_more("P…")` has more items: fetch
+   them when they matter to the verdict.
+4. If caller/definition results say "ripgrep fallback", or a graph answer says the code graph is building, call
+   `get_index_status` and mention the lower precision.
+5. **Semantic search freshness:**
    - After the user pulled, switched branches or made large edits, call `refresh_semantic_index` once before searching.
    - If a semantic result says the index is stale or building, tell the user. Retry after `get_index_status` shows it is ready.
    - During the very first build only keyword results are available.
+
+## While writing code
+
+- Before editing a function: `plan_change(symbol, change="…")` lists every place to touch, the contract to keep, the
+  tests to run and the risks.
+- After each edit: `check_my_edit()` (only what changed since the previous check) finds leaks on exit paths, cppcheck
+  errors, callers still using an old signature, switches missing a value and platform twins left behind. Fix or
+  `verify_finding` what it reports before moving on.
+- Before committing: `review_changes`.
+
+## Investigating
+
+- From a log line or error message: `find_log_origin("…the line…")`, then `get_context_pack` and `find_entry_paths`.
+- A hang or deadlock: `get_lock_graph`, then `track_lock_order` on the module, then `find_entry_paths` for the threads.
+- An unfamiliar area: `semantic_search`, `query_graph("members of X")`, `get_type_hierarchy`, `get_change_hotspots`.
+- The MCP prompts `investigate_hang`, `investigate_incident`, `plan_refactor` and `onboard_me` give the full workflows.
 
 ## Reading the output
 
@@ -51,6 +78,8 @@ If no StaticSight tools are available, tell the user to configure the MCP server
 - `track_struct_risks` "nearby" hits mean the memory operation is within ±2 lines. Read the code to confirm
   it operates on that type.
 - Callers are matched by name, so methods with the same name on other classes may appear. Discard unrelated ones.
+  Graph answers narrow by class where the code says so (`C::f()`, calls inside `C`); `obj.f()` may still reach any `f`.
+- Finding confidence: ❌ strong (cppcheck errors, stale callers, switch gaps with no `default:`), ⚠️ medium, ℹ️ weak.
 
 ## Checklist of small but costly issues
 
@@ -70,7 +99,7 @@ If no StaticSight tools are available, tell the user to configure the MCP server
 
 Group findings by severity: **Blocker**, **Major**, **Minor**, **Nit**. For each finding give:
 
-- what is wrong, and the evidence (tool name + `file:line`)
+- what is wrong, and the evidence (tool name + `file:line` + finding ID when there is one, verified)
 - the impact (who or what breaks)
 - a concrete fix
 - whether it is heuristic and needs human confirmation

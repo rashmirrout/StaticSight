@@ -1,5 +1,5 @@
 ### 🧬 SIMILAR CODE: `src/net/socket.cpp:9-12`
-Source: lines 9-12 (L9-12). Index: 21 files, 48 chunks (test-hash@builtin). Index is up to date.
+Source: lines 9-12 (L9-12). Index: 31 files, 72 chunks (test-hash@builtin). Index is up to date.
 1. `src/net/socket.cpp:5-7` — function `send_packet` (cpp) · 0.58 · similar
    ```cpp
    5 | int send_packet(int fd, const Packet& pkt) {

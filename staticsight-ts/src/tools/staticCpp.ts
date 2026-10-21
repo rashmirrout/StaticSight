@@ -6,6 +6,8 @@ import { readLines, resolveInWorkspace } from "../core/paths.js";
 import { type Finding, MSVC_ARGS, parseCppcheckXml, runCppcheck, SEVERITY_ORDER, wantsMsvc } from "../engines/cppcheck.js";
 import { FUNCTION_KINDS, innermost, type Tag, tryCtagsForFiles } from "../engines/ctags.js";
 import { changedLines, collectDiff, diffGet } from "../engines/git.js";
+import { projectLibrary } from "../engines/cppcheckLib.js";
+import { record } from "./findings.js";
 
 export { parseCppcheckXml };
 export type { Finding };
@@ -15,7 +17,9 @@ export async function staticAuditReport(cfg: Config, filePath: string, onlyChang
   if (!isCppFile(rel)) throw new InvalidArgument(`\`${rel}\` is not a C/C++ file.`);
   const lines = readLines(abs);
   const msvc = wantsMsvc(lines.join("\n"));
-  const run = (include: boolean) => runCppcheck(cfg, rel, abs, include, msvc ? MSVC_ARGS : []);
+  const [lib, pairs] = await projectLibrary(cfg);
+  const extraArgs = [...(msvc ? MSVC_ARGS : []), ...(lib ? [`--library=${lib}`] : [])];
+  const run = (include: boolean) => runCppcheck(cfg, rel, abs, include, extraArgs);
   let [findings, elsewhere, version, parseProblem, macros] = await run(true);
   let retried = false;
   if (parseProblem) {
@@ -67,6 +71,10 @@ export async function staticAuditReport(cfg: Config, filePath: string, onlyChang
       const mark = w === "diff" ? "✏️ " : w === "fn" ? "🔶 " : "";
       const cwe = f.cwe && f.cwe !== "0" ? ` (CWE-${f.cwe})` : "";
       const entry = [`${i + 1}. ${mark}**L${f.line}** \`[${f.severity}: ${f.id}]\` ${f.msg}${cwe}`];
+      if (["error", "warning"].includes(f.severity)) {
+        const fn = innermost(tags, f.line, FUNCTION_KINDS);
+        entry[0] += ` \`${record("cppcheck", f.severity === "error" ? "strong" : "medium", rel, f.line, f.id, f.msg, fn ? fn.qualified : "")}\``;
+      }
       if (f.line > 0 && f.line <= lines.length) entry.push(`   ${md.codeSpan(lines[f.line - 1])}`);
       const extra = f.locations.slice(1).filter((l) => l[1] !== f.line);
       if (extra.length) entry.push("   ↳ " + extra.slice(0, 4).map(([, ln, info]) => `L${ln}` + (info ? `: ${md.clip(info, 80)}` : "")).join("; "));
@@ -80,6 +88,10 @@ export async function staticAuditReport(cfg: Config, filePath: string, onlyChang
   const macroTxt = macros.length ? ` (unknown macro ${macros.slice(0, 3).map((m) => `\`${m}\``).join(", ")})` : "";
   if (retried) notes.push(`re-ran without include paths because included headers could not be parsed${macroTxt}`);
   if (parseProblem) notes.push(`cppcheck could not fully parse this file${macroTxt}, so coverage is partial; pass defines via STATICSIGHT_CPPCHECK_ARGS`);
+  if (pairs.length) {
+    const shown = pairs.slice(0, 3).map((p) => `\`${p.alloc}\`/\`${p.release}\``).join(", ") + (pairs.length > 3 ? ` +${pairs.length - 3} more` : "");
+    notes.push(`project allocators from contract comments: ${shown}`);
+  }
   notes.push("zero-compile mode: includes are best-effort and missing-include diagnostics are suppressed");
   out.push("\n_" + notes.join("; ") + ". ✏️ = on a changed line, 🔶 = inside a changed function._");
   return out.join("\n");
@@ -88,4 +100,3 @@ export async function staticAuditReport(cfg: Config, filePath: string, onlyChang
 export async function run_file_static_audit(args: { file_path: string; only_changed_lines?: boolean; base_ref?: string }): Promise<string> {
   return staticAuditReport(loadConfig(), args.file_path, args.only_changed_lines ?? false, args.base_ref ?? "");
 }
-

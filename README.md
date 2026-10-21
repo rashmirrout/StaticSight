@@ -30,22 +30,23 @@
 </p>
 
 <p align="center">
-  <b>16 tools</b> · <b>0 builds</b> · <b>−91% tokens on a real review</b> · <b>70% text-search noise filtered</b> ·
-  <b>deadlock-order checks</b> · <b>2 implementations</b> · <b>3 operating systems</b>
+  <b>33 tools</b> · <b>5 prompts</b> · <b>0 builds</b> · <b>−91% tokens on a real review</b> · <b>70% text-search noise filtered</b> ·
+  <b>multi-level call graph</b> · <b>deadlock-order checks</b> · <b>verifiable findings</b> · <b>2 implementations</b> · <b>3 operating systems</b>
 </p>
 
 StaticSight is a [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI coding agents
 (GitHub Copilot, Claude Code, Cursor, Windsurf) exact, citeable evidence about an **uncompiled** C++ repository.
-The agent does the reasoning. StaticSight provides the facts: which functions a diff touches, who calls them,
-what their contracts say, which structs are sent over the wire, which files include a header, which paths leak,
-and what cppcheck finds.
+The agent does the reasoning. StaticSight provides the facts: which functions a diff touches, who calls them (and who
+calls those, up to the program's entry points and threads), what their contracts say, which structs are sent over the
+wire, which files include a header, which paths leak, which switches miss a case, which platform twin was forgotten,
+and what cppcheck finds. Every finding has an ID the agent can re-verify before it reports it.
 
 ## ✨ At a glance
 
 | 🔍 **Review evidence** | 🧠 **Semantic search** | 🛠️ **Command line too** |
 |---|---|---|
-| Changed functions, callers, contracts, struct layout risks, header blast radius, lock consistency, lock order and cppcheck, with `file:line` for every claim. No `compile_commands.json`, no build. | Find code by meaning across the whole repository, in every language, with a local model. No network, no git hooks. | Every tool runs in a terminal and prints exactly what the agent receives, so you can check and learn each step. |
-| [16 MCP tools →](docs/MCP_TOOLS.md) | [How it works →](docs/semantic-search/README.md) | [Command-line guide →](docs/cli-guide.md) |
+| Changed functions, callers several levels deep, entry points, contracts, struct layout risks, header blast radius, lock consistency, lock order, completeness and cppcheck, with `file:line` for every claim. No `compile_commands.json`, no build. | Find code by meaning across the whole repository, in every language, with a local model. No network, no git hooks. | Every tool runs in a terminal and prints exactly what the agent receives, so you can check and learn each step. |
+| [33 MCP tools →](docs/MCP_TOOLS.md) | [How it works →](docs/semantic-search/README.md) | [Command-line guide →](docs/cli-guide.md) |
 
 | 🐧 **Linux · macOS** | 🪟 **Windows** | 🔁 **Two implementations** |
 |---|---|---|
@@ -58,9 +59,11 @@ and what cppcheck finds.
 | 🪙 **Far fewer tokens** | Reviews in about 5k tokens instead of reading 55k tokens of changed files | −91% on a real 6-file change; −99% versus reading a function's whole file |
 | 🎯 **Accurate answers** | Callers that are real calls, with the calling function and whether the result is used | 70% of text-search hits were not calls |
 | 🔬 **Depth AI search lacks** | Header reach through other headers, lock consistency, lock-order cycles, locks held across blocking calls, struct layout risks, contracts | +54 files per header (median) that a text search does not show |
-| 🧑‍💻 **Coding** | Check callers, contracts and layout *before* you edit | the Copilot instruction makes the agent do this |
-| 🔍 **Review** | One call: blockers with `file:line`, cppcheck on changed lines, a checklist | 6 of 6 planted bugs found |
-| 🧭 **Code research** | Find code by meaning, then prove it with the precise tools | semantic search + call graph |
+| 🕸️ **Reach, not just callers** | What a change affects 3 calls up, which entry points and threads reach it, which tests cover it | a persistent code graph that refreshes itself after `git pull` |
+| 🧑‍💻 **Coding** | `plan_change` before you edit; `check_my_edit` after every edit | leaks, stale callers, missed cases and forgotten twins caught before the commit |
+| 🔍 **Review** | One call: blockers with `file:line`, cppcheck on changed lines, reach, completeness, earlier fixes, a checklist | 9 of 9 planted bugs found |
+| ✔️ **Findings you can check** | Every finding has an ID; `verify_finding` re-runs it on the current code and lists what would disprove it | 12 of 12 planted-bug tasks with evidence ([eval](docs/benchmarks.md#evaluate-an-agent-on-planted-bugs)) |
+| 🧭 **Code research** | Find code by meaning, from a log line to its origin, then prove it with the precise tools | semantic search + code graph |
 | 🔒 **Private and zero-compile** | Local only; no build, no cloud, no git hooks; data in `.staticsight/` | by design |
 | ✅ **Verifiable** | Every tool runs in a terminal with the output the agent saw | `staticsight tool …` |
 
@@ -163,15 +166,23 @@ Tokens counted with `o200k_base`; every number comes from [`scripts/benchmark.py
 | Can these locks deadlock? | nothing | the lock-acquisition order of the whole repository, **cycles**, a lock taken twice, locks held across `send`/`Sleep`/`WaitForSingleObject` |
 | What breaks if the struct grows? | every mention (384 for 10 structs) | the **20 sites** that `memcpy`, `send`, `sizeof` or cast it, including the operation on the next line |
 | What must a caller guarantee? | the declaration line | doc comment, `@pre` / `@warning`, MUST/NEVER obligations, qualifiers |
+| What does the change reach, three calls up? | one level of name matches, if the agent keeps searching | callers of callers, resolved by class, through threads and callbacks, up to `main`/`ServiceMain` and the tests |
+| Is the change complete? | nothing | switches missing a new enum value, `_win`/`_posix` twins and encode/decode pairs left unchanged, callers with the old signature |
+| Was this line fixed before? | nothing | `git blame` and the fix/revert commits that touched those lines |
 | Where else is this bug? | exact text matches | semantically similar code: copy-paste twins, platform variants |
 
 On SomeCPPRepo, the lock-order analysis scanned the 865 functions that take locks in 12 seconds and found a genuine
 recursive acquisition of a Windows SRW lock (a function holding it shared calls a method that takes it again), plus
 nine places that hold a lock across a blocking call. No text search can ask that question.
 
+Its [code graph](docs/code-graph.md) (69,650 definitions, 141,106 calls) builds in 18 seconds and re-checks itself in
+0.04 seconds per call. `get_impact` answers three levels of callers (up to 1,400 call sites) in 0.4 seconds;
+`find_entry_paths` traces a function back to the 50+ program entry points and 80+ threads that reach it in about 2
+seconds.
+
 ### 🐞 Bugs the diff hides, found
 
-On the test repository, one `review_changes` call surfaces **all six** planted review bugs, each with evidence:
+On the test repository, one `review_changes` call surfaces **all nine** planted review bugs, each with evidence:
 
 | Bug | Evidence StaticSight returns |
 |---|---|
@@ -181,6 +192,9 @@ On the test repository, one `review_changes` call surfaces **all six** planted r
 | A new method writes shared state without the mutex | same table: `❌ BARE` write |
 | Callers ignore a new error code | 3 call sites, 2 marked `⚠️ result ignored` |
 | Two locks taken in opposite orders, one through a call | `pool_mutex → stats_mutex → pool_mutex` cycle, "via `drain()`", plus a `send()` while locked |
+| An early `return` leaks a buffer from the project's own allocator | cppcheck `memleak`, because the contract "MUST be paired with release_buffer()" became a cppcheck library |
+| An enum gains `Ping`, one `switch` is not updated | section 12: `msg_name` misses `Ping` (falls into `default:`) |
+| The POSIX timer is fixed, the Windows twin is not | section 12: `start_timer` in `timer_win.cpp` was not changed |
 
 ### 👀 Before and after: "can these two locks deadlock?"
 
@@ -221,7 +235,8 @@ compiler tools rather than replacing them. See [The problem](docs/book/01-the-pr
 ### ⚖️ Honest limits
 
 StaticSight is **not a compiler**. It does not resolve types or overloads, heavy macros can blind it, and its leak,
-locking and lock-order analyses are text heuristics that say so in their output. cppcheck findings on changed lines are
+locking, lock-order and call-graph analyses are text heuristics that say so in their output (`obj.f()` may reach any
+`f`; calls through function-pointer tables are not followed). cppcheck findings on changed lines are
 the strongest evidence; everything else is a precise lead that the agent is told to verify. Details and roadmap:
 [Limits and roadmap](docs/book/11-limits-and-roadmap.md). [Measure it on your own repository](docs/benchmarks.md#run-it) before
 you trust these numbers.
@@ -236,32 +251,46 @@ you trust these numbers.
 | [Semantic search](docs/semantic-search/README.md) | Manual guide, MCP flow, internals, experiments |
 | [MCP tool reference](docs/MCP_TOOLS.md) · [Raw commands](docs/COMMANDS.md) | Every tool and every engine command |
 | [Benchmarks](docs/benchmarks.md) | Tokens, precision and depth versus text search; run it on your repository |
+| [Developer guide](docs/developer-guide.md) | Set up, test and change StaticSight itself |
+| [Future scope](docs/future-scope.md) | Where StaticSight goes next and why |
+| [Contributor tracker](docs/contributor-tracker.md) | Pick one bounded task with acceptance checks and an AI-ready prompt |
 | [The StaticSight book](docs/book/00-preface.md) | What it does, why and how, chapter by chapter |
 
 ## 🧰 Tools
 
 | Tool | Engine | Use it when |
 |---|---|---|
-| `review_changes` | all | **Start here.** One budgeted bundle for "review my changes": diff scopes, cppcheck on changed lines, branch skeletons, caller impact, struct layout risks, header blast radius, lock consistency, newly introduced calls, and a reviewer checklist. |
+| `review_changes` | all | **Start here.** One budgeted bundle for "review my changes": diff scopes, cppcheck on changed lines, branch skeletons, caller impact, struct layout risks, header blast radius, lock consistency and order, newly introduced calls, reach, completeness, earlier fixes, and a reviewer checklist. |
+| `check_my_edit` | git + ctags + cppcheck + graph | After every edit: leaks on exit paths, cppcheck on changed lines, callers still using an old signature, missing switch cases, unchanged platform twins. |
+| `plan_change` | graph + git | Before an edit: every place to touch, in order, with the contract, tests and risks. |
 | `get_diff_scopes` | git + ctags | Map every changed line (committed, staged, unstaged, untracked) to its function/class/struct/macro. Reports new and removed symbols, signature changes (old → new), layout changes, and the next calls to make. |
 | `get_enclosing_scope` | ctags | Full, line-numbered body of the innermost function/class around `file:line`. |
 | `get_branch_skeleton` | ctags + regex + brace depth | if/else/switch/loop/return/throw tree with 🔒 locks, 📥 allocations, 📤 releases, 🛑 early exits, ⚠️ possible leaks and ✏️ changed lines. |
-| `get_upstream_callers` | GNU Global (`global -xr`), falls back to rg | Call sites with the caller function and whether the **return value is ignored**. |
-| `get_symbol_definition` | `global -xd`, falls back to rg + ctags | Definitions and overloads with signatures. |
+| `get_upstream_callers` | GNU Global (`global --result=ctags -r`), falls back to rg | Call sites with the caller function and whether the **return value is ignored**; notes virtual overrides. |
+| `get_impact` | code graph | Callers of callers (or callees), several levels deep, with 🚪 entry points, 🧵 threads/callbacks and 🧪 tests. |
+| `get_call_paths` / `find_entry_paths` | code graph | The call chains between two functions; which entry points and threads reach a function. |
+| `get_type_hierarchy` / `query_graph` | code graph | Bases, derived classes and overrides; free-form `callers*2 of X in src/*` queries. |
+| `get_context_pack` | all | Everything about one function in one budgeted call. |
+| `get_symbol_definition` | `global --result=ctags -d`, falls back to rg + ctags | Definitions and overloads with signatures. |
 | `get_symbol_contract` | global + ctags | Declaration/definition signatures, qualifiers, doc comment, Doxygen `@pre/@warning/...`, obligations (MUST, thread-safe, ownership). |
 | `track_struct_risks` | rg `--json -C2` | `sizeof`, `memcpy`/`memcmp`, casts, raw `send`/`write`, `hton*`, packing, unions, static_asserts that depend on a struct's layout. Comments are ignored, and the 2 lines around each hit are checked too. |
 | `get_include_blast_radius` | rg `--json` | Direct and transitive includers, grouped by directory, with the share of translation units affected. |
 | `track_state_mutations` | rg + ctags | Every read/write of a member or variable, and whether a lock or atomic protects it (std, Win32 critical sections and SRW locks, RAII wrappers). Flags **inconsistent locking**. |
 | `track_lock_order` | rg + ctags | Lock-acquisition order of the whole repository: **potential deadlock cycles** (also through calls), a lock taken twice, locks held across blocking calls. |
-| `run_file_static_audit` | cppcheck `--xml` | Leaks, null derefs, bounds and so on. Findings on changed lines are marked. Best-effort includes, with an automatic retry when headers use unknown macros. |
-| `semantic_search` | local ONNX embeddings + rg | Find code by **meaning** across every language (code, scripts, docs, configs). Hybrid semantic + keyword ranking. Refreshes the index first when files changed. |
+| `get_lock_graph` | rg + ctags | A module's locks, who takes them and in which order, as a Mermaid diagram. |
+| `run_file_static_audit` | cppcheck `--xml` | Leaks, null derefs, bounds and so on, also for your own allocators (read from contract comments). Findings on changed lines are marked. Best-effort includes, with an automatic retry when headers use unknown macros. |
+| `find_switch_coverage` / `find_counterparts` / `find_related_tests` | graph + git | Is the change complete: missing enum cases, pairs and platform twins, the tests that reach it. |
+| `get_line_history` / `get_change_hotspots` | git + graph | Earlier fixes on these lines; files that change often, need fixes and are widely used. |
+| `find_log_origin` | rg + graph | From a log line to the format string, its function and callers. |
+| `verify_finding` / `get_more` | — | Re-check a finding by ID on the current code; the next page of a truncated list. |
+| `semantic_search` | local ONNX embeddings + rg | Find code by **meaning** across every language (code, scripts, docs, configs). Hybrid semantic + keyword ranking. Default `jina-code`; optional `minilm-fast`, `bge-small-en`, or a pinned JSON registry entry. |
 | `find_similar_code` | local ONNX embeddings | Copy-paste twins and parallel implementations of a function/region: "where else does this bug/fix apply?" |
 | `refresh_semantic_index` | local ONNX embeddings | Build/refresh the semantic index on demand (incremental; large jobs run in the background). The only tool that writes, and only into `.staticsight/`. |
-| `get_index_status` | — | GNU Global + semantic index state (progress, languages, model) and which engines are installed. |
+| `get_index_status` | — | GNU Global, semantic index and code graph state (progress, languages, model) and which engines are installed. |
 
 
-Prompt `review_cpp_changes(focus?)` gives the agent a step-by-step review workflow and a checklist of small but costly
-C++ issues. A Copilot skill and instruction (`.github/skills/`, `.github/instructions/`) teach the agent the same workflow;
+Five prompts give the agent step-by-step workflows: `review_cpp_changes`, `investigate_hang`, `investigate_incident`,
+`plan_refactor` and `onboard_me`. A Copilot skill and instruction (`.github/skills/`, `.github/instructions/`) teach the agent the same workflow;
 see [Using it with AI](docs/book/10-using-it-with-ai.md).
 
 ## 💬 A real answer
@@ -277,7 +306,7 @@ All answers are built from real tool output on the test repository (`shared/fixt
 > 2. `src/net/socket.cpp:9` in `copy_packet`: `memcpy` of the whole object on the next line (flagged as "within ±2 lines").
 > 3. `src/storage/wal.cpp:5` in `wal_append` and `src/storage/wal.cpp:9` in `wal_replay`: `memcpy(..., sizeof(Packet))` into the write-ahead log. Existing WAL records will no longer replay correctly.
 >
-> The header also has a wide reach (`get_include_blast_radius`): 7 direct and 3 transitive includers, which is 8 of 13 translation units (62%).
+> The header also has a wide reach (`get_include_blast_radius`): 8 direct and 3 transitive includers, which is 9 of 20 translation units (45%).
 >
 > **Suggested fix:** version the wire and WAL formats, or serialize per field. Add `static_assert(sizeof(Packet) == N)` so the next layout change fails at compile time.
 </details>
@@ -298,26 +327,37 @@ StaticSight/
 ├── requirements*.txt       # pip dependencies: core, semantic search
 ├── shared/                 # single source of truth for both implementations
 │   ├── tool-spec.json      # tool names, parameters, descriptions (what the agent sees)
-│   ├── prompts/            # MCP prompt: review_cpp_changes
+│   ├── prompts/            # MCP prompts: review, hang, incident, refactor, onboarding
+│   ├── graph/              # code graph SQLite schema
+│   ├── eval/               # planted-bug tasks for scripts/eval_agent.py
 │   ├── semantic/           # embedding model manifest (pinned + sha256), SQLite schema, language rules
 │   ├── fixtures/           # test C++ repository as data, with planted review bugs
 │   └── golden/             # expected Markdown per test case (Python and TypeScript must match byte for byte)
 ├── staticsight-py/         # Python implementation (FastMCP, pytest)
 ├── staticsight-ts/         # TypeScript implementation (@modelcontextprotocol/sdk, vitest)
-├── scripts/                # install.sh / install.ps1 (opt-in), benchmark.py (measure on your repo), semantic_query.py
+├── scripts/                # install.sh / install.ps1 (opt-in), benchmark.py and eval_agent.py (measure on your repo), semantic_query.py
 ├── pipelines/, .github/    # CI (Linux + Windows), Copilot skill and instruction
 └── docs/                   # guides, reference, semantic search, the book
 ```
 
 ## 🧪 Development
 
+The [Developer guide](docs/developer-guide.md) explains every step: creating the Python environment with `uv sync` (or
+`venv` + pip), installing the TypeScript packages, running and filtering both test suites, updating golden files,
+checking docs and parity, changing dependencies and adding a tool, on Linux, macOS and Windows. The short version:
+
 ```bash
 cd staticsight-py && uv sync && uv run pytest -q     # Python suite (uv is only needed for development)
 cd staticsight-ts && npm install && npm test          # TypeScript suite
 python3 docs/check_docs.py                            # run the documented commands, check every link
 python3 scripts/benchmark.py --repo /path/to/repo      # tokens, precision and depth on any repository
+python3 scripts/eval_agent.py                          # planted-bug tasks: evidence found, tokens, optional agent runs
+python3 scripts/parity_check.py /path/to/repo          # Python and TypeScript give byte-identical answers on your code
 ```
 
 `STATICSIGHT_UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py` regenerates `shared/golden` from Python; the TypeScript
 suite must then match it byte for byte. CI runs everything on Linux and Windows. See
 [Trust and testing](docs/book/09-trust-and-testing.md).
+
+Want to contribute? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md), then claim a **Ready** item from the
+[contributor tracker](docs/contributor-tracker.md).

@@ -7,6 +7,7 @@ import { loadConfig, workspaceDataDir } from "./config.js";
 import { ensureSemanticBuilt, oneShotSemantic } from "./cli.js";
 import { getIndexer, setIndexerInfoLogs } from "./indexer.js";
 import { getSemanticIndex } from "./semantic/index.js";
+import { getGraph } from "./graph/store.js";
 import type { ParamSpec, ToolSpec } from "./server.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<string>;
@@ -18,6 +19,7 @@ export interface ToolHost {
 }
 
 const SEMANTIC_TOOLS = new Set(["semantic_search", "find_similar_code", "refresh_semantic_index"]);
+const GRAPH_TOOLS = new Set(["get_impact", "get_call_paths", "find_entry_paths", "get_type_hierarchy", "query_graph", "get_lock_graph", "get_context_pack", "get_change_hotspots", "find_switch_coverage", "find_counterparts", "find_related_tests", "find_log_origin", "plan_change", "check_my_edit", "review_changes", "get_upstream_callers", "verify_finding"]);
 
 class UsageError extends Error {}
 
@@ -169,6 +171,17 @@ async function prepare(name: string): Promise<void> {
     process.stderr.write("  … building the GNU Global index (first run; large repositories take a few minutes)\n");
   }
   await getIndexer(cfg).start();
+  if (GRAPH_TOOLS.has(name)) await ensureGraphBuilt(cfg);
+}
+
+async function ensureGraphBuilt(cfg = loadConfig()): Promise<void> {
+  const g = getGraph(cfg);
+  const d = await g.drift();
+  if (d.total > cfg.graphAutoRefreshFiles) {
+    const verb = !g.exists || g.fileCount() === 0 ? "building" : "refreshing";
+    process.stderr.write(`  … ${verb} the code graph (${d.total} files; large repositories take a minute)\n`);
+    await g.refresh();
+  }
 }
 
 /** The MCP answer may say a build continues in the background; a one-shot process must not cut it short. */
@@ -184,6 +197,13 @@ export async function runToolCli(argv: string[], host: ToolHost): Promise<number
   setIndexerInfoLogs(false);
   const tools = host.tools;
   const byName = new Map(tools.map((t) => [t.name, t]));
+  let serverUrl = (process.env.STATICSIGHT_SERVER ?? "").trim();
+  if (argv[0] === "--server" || argv[0]?.startsWith("--server=")) {
+    if (argv[0] === "--server") {
+      if (argv.length < 2) { process.stderr.write("error: --server needs a URL, e.g. http://127.0.0.1:8765/mcp\n"); return 2; }
+      serverUrl = argv[1]; argv = argv.slice(2);
+    } else { serverUrl = argv[0].slice("--server=".length); argv = argv.slice(1); }
+  }
   if (!argv.length || ["--list", "-l", "list", "-h", "--help", "help"].includes(argv[0])) {
     process.stdout.write(listText(tools) + "\n");
     return 0;
@@ -209,6 +229,23 @@ export async function runToolCli(argv: string[], host: ToolHost): Promise<number
     throw e;
   }
   oneShotSemantic();
+  if (serverUrl) {
+    try {
+      const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+      const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      const client = new Client({ name: "staticsight-cli", version: "0.1.0" });
+      const transport = new StreamableHTTPClientTransport(new URL(serverUrl));
+      await client.connect(transport);
+      const res = await client.callTool({ name, arguments: args });
+      await client.close();
+      const text = (res.content as any[]).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      process.stdout.write(text + "\n");
+      return text.startsWith("### ❌") ? 1 : 0;
+    } catch (e) {
+      process.stderr.write(`error: cannot reach the StaticSight server at ${serverUrl}: ${(e as Error).name}: ${(e as Error).message}\nStart it with \`staticsight serve\` (it keeps the indexes warm), or drop --server.\n`);
+      return 3;
+    }
+  }
   await prepare(name);
   const text = await host.safeTool(name, host.handlers[name])(args);
   if (SEMANTIC_TOOLS.has(name)) await finishBackground();

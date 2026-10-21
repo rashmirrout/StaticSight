@@ -11,6 +11,7 @@ from ..engines.ctags import BLOCK_KINDS, FUNCTION_KINDS, Tag, ctags_for_file, in
 from ..engines.git import changed_lines
 from ..core.paths import read_lines, resolve_in_workspace
 from ..core.errors import InvalidArgument
+from .findings import record
 
 MAX_SCOPE_LINES = 150
 MAX_SKELETON_LINES = 3000
@@ -144,7 +145,7 @@ def build_skeleton(
         mark = " ✏️" if n in changed else ""
         nodes.append(f"{prefix}[L{n}] {text}{mark}")
 
-    def exit_text(kw: str, detail: str, early: bool) -> str:
+    def exit_text(kw: str, detail: str, early: bool, n: int) -> str:
         stats["throws" if kw == "throw" else "returns"] += 1
         if early:
             stats["early"] += 1
@@ -155,6 +156,10 @@ def build_skeleton(
         if leaks:
             stats["warnings"] += 1
             text += f" ⚠️ {'early exit; ' if early else ''}{', '.join(leaks)} not released on this path"
+            names = ",".join(re.findall(r"`(\w+)`", ", ".join(leaks)))
+            fid = record("leak_path", "medium", rel, n, names,
+                         f"{kw} at line {n} leaves {', '.join(leaks)} unreleased", function=label or "")
+            text += f" [{fid}]"  # inside a code block, so no backticks
         return text
 
     def inline_stmt(after_code: str, after_orig: str, d: int, n: int) -> None:
@@ -165,7 +170,7 @@ def build_skeleton(
         semi = after_code.find(";")
         idetail = md.clip(after_orig[len(ikw) : semi if semi >= 0 else len(after_orig)].strip(), 80)
         if ikw in ("return", "co_return", "throw"):
-            emit(d + 1, n, exit_text(ikw, idetail, True))
+            emit(d + 1, n, exit_text(ikw, idetail, True, n))
         else:
             emit(d + 1, n, f"{ikw.upper()} {idetail}".rstrip())
 
@@ -255,7 +260,7 @@ def build_skeleton(
         elif kw in ("return", "co_return", "throw"):
             semi = code.find(";", kw_end)
             detail = md.clip(orig[kw_end : semi if semi >= 0 else len(orig)].strip(), 80)
-            emit(eff, n, exit_text(kw, detail, eff >= 2) + tag_suffix)
+            emit(eff, n, exit_text(kw, detail, eff >= 2, n) + tag_suffix)
         else:  # break / continue / goto
             semi = code.find(";", kw_end)
             detail = md.clip(orig[kw_end : semi if semi >= 0 else len(orig)].strip(), 80)

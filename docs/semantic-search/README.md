@@ -38,7 +38,7 @@ leak, whether they are locked. Results always carry `file:line`, a score and an 
 ```mermaid
 flowchart LR
     A[Repository files] -->|rg --files, .gitignore| B[Chunker<br/>functions, classes,<br/>sections, windows]
-    B --> C[Embedding model<br/>jina-code, ONNX, CPU]
+    B --> C[Embedding model<br/>jina-code default; selectable ONNX, CPU]
     C --> D[(.staticsight/semantic.db<br/>SQLite)]
     Q[Question] --> E[Embed question]
     E --> F[Cosine top 60]
@@ -51,6 +51,12 @@ flowchart LR
 
 The index lives in `<repo>/.staticsight/`, a folder that git ignores (it holds its own `.gitignore`). Every clone or
 worktree has its own index, and deleting the folder is always safe.
+
+The default remains `jina-code`; bare `staticsight model download` always downloads it and needs no environment
+variable. `model list` also offers `minilm-fast` and `bge-small-en`; downloading one with `--model NAME` does not
+activate it. Every non-default model requires `STATICSIGHT_EMBED_MODEL=NAME` in the terminal or MCP server environment,
+followed by a full semantic rebuild. A pinned external JSON registry is supported through
+`STATICSIGHT_MODEL_MANIFEST`.
 
 ---
 

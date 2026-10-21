@@ -18,7 +18,7 @@ async def test_diff_scopes_maps_changes(workspace):
 
 async def test_skeleton_flags_leak_on_early_return(workspace):
     out = await T["get_branch_skeleton"]("src/router.cpp", symbol="process_packet")
-    assert "[L13] 🛑 RETURN -2 ⚠️ early exit; `buffer` (L11) not released on this path ✏️" in out
+    assert "[L13] 🛑 RETURN -2 ⚠️ early exit; `buffer` (L11) not released on this path [F7a0cc5] ✏️" in out
     assert "[L16] 🛑 RETURN -1\n" in out  # null-checked path must not be flagged
     assert "decoy" not in out and "RETURN y" not in out  # comment/string decoys ignored
 
@@ -51,14 +51,14 @@ async def test_blast_radius_escapes_and_transitive(workspace):
     out = await T["get_include_blast_radius"]("packet.hpp")
     assert "decoy.cpp" not in out  # 'packetXhpp' must not match an unescaped '.'
     assert "`src/metrics.cpp` (depth 2)" in out
-    assert "**Direct includers:** 7 files" in out
+    assert "**Direct includers:** 8 files" in out
     assert "src/enc/bom_utf8.cpp:1" in out  # UTF-8 BOM must not hide a line-1 #include
 
 
 async def test_state_mutations_inconsistent_locking(workspace):
     out = await T["track_state_mutations"]("route_count")
     assert "Inconsistent locking" in out
-    assert "| `src/router.cpp:38` | `Router::reset` | write | ❌ BARE |" in out
+    assert "| `src/router.cpp:38` | `Router::reset` | write | ❌ BARE `F" in out
     assert "🔒 unique_lock (L29)" in out
 
 
@@ -70,7 +70,9 @@ async def test_static_audit_memleak_in_diff(workspace):
 async def test_review_bundle_covers_everything(workspace):
     out = await T["review_changes"]()
     for needle in ("memleak", "not released", "result ignored", "LOW-LEVEL MEMORY USAGES: `Packet`",
-                   "BLAST RADIUS", "Inconsistent locking", "Reviewer checklist"):
+                   "BLAST RADIUS", "Inconsistent locking", "Reviewer checklist",
+                   "potential deadlock cycle", "Memory leak: ring", "in `msg_name`: missing `Ping`",
+                   "`start_timer` (`src/platform/timer_win.cpp:3`) is the platform twin"):
         assert needle in out, needle
     assert len(out) <= 16000 + 200
 
